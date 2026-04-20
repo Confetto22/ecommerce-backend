@@ -1,0 +1,103 @@
+name: ecommerce-backend
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-ecommerce}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Uncomment once docker/init-db.sql exists (see Phase 0 §C1).
+      # - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-ecommerce}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      APP_MODE: api
+      PORT: 3000
+      # Override any DATABASE_URL from .env so the app talks to the compose Postgres.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-ecommerce}?schema=public
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - .env
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      # Mount source for hot-reload; keep container-built node_modules and generated client.
+      - ./src:/app/src
+      - ./test:/app/test
+      - ./prisma:/app/prisma
+      - ./prisma.config.ts:/app/prisma.config.ts
+      - ./nest-cli.json:/app/nest-cli.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tsconfig.build.json:/app/tsconfig.build.json
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # worker:
+  #   Enable once src/main.ts branches on APP_MODE (Phase 0 §E1).
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     target: development
+  #   restart: unless-stopped
+  #   environment:
+  #     NODE_ENV: development
+  #     APP_MODE: worker
+  #     DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-ecommerce}?schema=public
+  #     REDIS_URL: redis://redis:6379
+  #   env_file:
+  #     - .env
+  #   command: ["npm", "run", "start:dev"]
+  #   volumes:
+  #     - ./src:/app/src
+  #     - ./prisma:/app/prisma
+  #     - ./prisma.config.ts:/app/prisma.config.ts
+  #     - ./nest-cli.json:/app/nest-cli.json
+  #     - ./tsconfig.json:/app/tsconfig.json
+  #     - ./tsconfig.build.json:/app/tsconfig.build.json
+  #     - ./package.json:/app/package.json
+  #     - ./package-lock.json:/app/package-lock.json
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

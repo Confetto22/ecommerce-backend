@@ -1,0 +1,52 @@
+# Dependencies & build outputs (regenerated in the image)
+node_modules
+dist
+build
+coverage
+.nyc_output
+generated
+
+# Local env & secrets
+.env
+.env.*
+!.env.example
+
+# VCS / editor / OS cruft
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Logs & runtime junk
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids
+*.pid
+*.pid.lock
+*.seed
+
+# Docker & CI artifacts (context doesn't need them)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker
+
+# Tests & docs (not needed in the prod image)
+test
+docs
+README.md
+*.md
+
+# Misc
+.prettierrc
+.editorconfig
+.temp
+.tmp
