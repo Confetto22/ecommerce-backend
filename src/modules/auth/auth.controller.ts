@@ -25,9 +25,17 @@ export class AuthController {
     return await this.authService.register(registerData);
   }
 
-  // @Post('login')
-  // @HttpCode(HttpStatus.OK)
-  // async login(@Body() loginData: LoginDto, @Res({passthrough:true}) res: Response) {
-  //   return await this.authService.login (user, res, loginData.rememberMe || false)
-  // }
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  async login(
+    @Body() loginData: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return await this.authService.login(
+      loginData.email,
+      loginData.password,
+      loginData.rememberMe || false,
+      res,
+    );
+  }
 }

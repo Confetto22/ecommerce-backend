@@ -42,7 +42,10 @@ export class AuthService {
     };
   }
 
-  // async login(user: User, res: Response, rememberMe: boolean = false): Promise<user:User> {
-
-  // }
+  async login(
+    email: string,
+    password: string,
+    rememberMe: boolean = false,
+    res: Response,
+  ) {}
 }
