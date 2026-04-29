@@ -2,20 +2,19 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
-import { mountBullBoard } from './infrastructure/queues/bull-board.setup';
-
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api');
-  app.use(helmet({
-    crossOriginResourcePolicy:{policy: 'cross-origin'}
-  }))
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
-  app.enableShutdownHooks()
+  app.enableShutdownHooks();
 
-  
   app.enableCors({
     origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
 
@@ -30,15 +29,13 @@ async function bootstrap() {
     ],
   });
 
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform:true
-  }))
-
-  if (process.env.NODE_ENV !== 'production') {
-    mountBullBoard(app, []);
-  }
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   await app.listen(process.env.PORT ?? 8080);
 }

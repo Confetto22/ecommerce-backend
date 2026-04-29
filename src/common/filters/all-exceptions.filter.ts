@@ -1,49 +1,50 @@
-import { Catch,  ExceptionFilter, Logger, ArgumentsHost, HttpException, HttpStatus } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import  { Response,  Request } from "express";
-import { ErrorResponse } from "../interfaces/error-response.interface";
-import { Prisma } from "generated/prisma/client";
-
+import {
+  Catch,
+  ExceptionFilter,
+  Logger,
+  ArgumentsHost,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Response, Request } from 'express';
+import { ErrorResponse } from '../interfaces/error-response.interface';
+import { Prisma } from 'generated/prisma/client';
 
 @Catch()
-export class AllExceptionsFilter implements ExceptionFilter{
-    private readonly logger = new Logger(AllExceptionsFilter.name);
-    constructor(private readonly config: ConfigService) { }
-    
-    catch(exception: unknown, host: ArgumentsHost): void{
-        const ctx = host.switchToHttp();
-        const response = ctx.getResponse<Response>();
-        const request = ctx.getRequest<Request>();
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
+  constructor(private readonly config: ConfigService) {}
 
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const request = ctx.getRequest<Request>();
 
-        const { statusCode, error, message } = this.mapException(exception)
-        
-        const payload: ErrorResponse = {
-            statusCode,
+    const { statusCode, error, message } = this.mapException(exception);
+
+    const payload: ErrorResponse = {
+      statusCode,
       error,
       message,
       path: request.url,
       method: request.method,
       timestamp: new Date().toISOString(),
       requestId: (request.headers['x-request-id'] as string) ?? undefined,
-        }
+    };
 
-        if (this.config.get<string>('NODE_ENV') !== 'production' && exception instanceof Error) {
-            payload.stack = exception.stack;
-        }
-
-        this.log(statusCode, exception, request)
-        response.status(statusCode).json(payload)
-
-        
+    if (
+      this.config.get<string>('NODE_ENV') !== 'production' &&
+      exception instanceof Error
+    ) {
+      payload.stack = exception.stack;
     }
 
+    this.log(statusCode, exception, request);
+    response.status(statusCode).json(payload);
+  }
 
-
-
-
-
-    private mapException(exception: unknown): {
+  private mapException(exception: unknown): {
     statusCode: number;
     error: string;
     message: string | string[];
@@ -54,7 +55,10 @@ export class AllExceptionsFilter implements ExceptionFilter{
       if (typeof res === 'string') {
         return { statusCode, error: exception.name, message: res };
       }
-      const { message, error } = res as { message: string | string[]; error?: string };
+      const { message, error } = res as {
+        message: string | string[];
+        error?: string;
+      };
       return {
         statusCode,
         error: error ?? exception.name,
@@ -76,13 +80,14 @@ export class AllExceptionsFilter implements ExceptionFilter{
       error: 'InternalServerError',
       message: 'An unexpected error occurred.',
     };
-    }
-    
+  }
 
-    private mapPrismaError(exception: Prisma.PrismaClientKnownRequestError) {
+  private mapPrismaError(exception: Prisma.PrismaClientKnownRequestError) {
     switch (exception.code) {
       case 'P2002': {
-        const target = (exception.meta?.target as string[] | undefined)?.join(', ') ?? 'field';
+        const target =
+          (exception.meta?.target as string[] | undefined)?.join(', ') ??
+          'field';
         return {
           statusCode: HttpStatus.CONFLICT,
           error: 'UniqueConstraintViolation',
@@ -108,17 +113,21 @@ export class AllExceptionsFilter implements ExceptionFilter{
           message: `Database error (${exception.code}).`,
         };
     }
-    }
-    
-    private log(statusCode: number, exception: unknown, request: Request): void {
+  }
+
+  private log(statusCode: number, exception: unknown, request: Request): void {
     const msg = `${request.method} ${request.url} -> ${statusCode}`;
     if (statusCode >= 500) {
       this.logger.error(
         msg,
-        exception instanceof Error ? exception.stack : JSON.stringify(exception),
+        exception instanceof Error
+          ? exception.stack
+          : JSON.stringify(exception),
       );
     } else {
-      this.logger.warn(`${msg} :: ${exception instanceof Error ? exception.message : 'error'}`);
+      this.logger.warn(
+        `${msg} :: ${exception instanceof Error ? exception.message : 'error'}`,
+      );
     }
   }
 }
