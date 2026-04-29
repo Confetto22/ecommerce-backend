@@ -14,25 +14,32 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  firstname    String
-  lastname     String
-  email        String   @unique
-  location     String
-  phone        String
-  password     String
-  role         Role     @default(PATIENT)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  profilePhoto String?
+  id              String    @id @default(uuid())
+  firstname       String
+  lastname        String
+  email           String    @unique
+  location        String
+  phone           String
+  password        String
+  role            Role      @default(PATIENT)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  profilePhoto    String?
+  city            String
+  state           String
+  country         String
+  emailVerifiedAt DateTime?
 
   // Relationships
-  sessions       Session[] // User sessions
-  tokens         Token[] // Email verification, password reset
-  PatientProfile PatientProfile?
+  sessions        Session[] // User sessions
+  tokens          Token[] // Email verification, password reset
+  patientProfile  PatientProfile?
+  doctorProfile   DoctorProfile?
+  appointmentLogs AppointmentLog[]
 
   @@index([email])
   @@index([role])
+  @@map("users")
 }
 
 model PatientProfile {
@@ -42,70 +49,106 @@ model PatientProfile {
   updatedAt DateTime @updatedAt
 
   // RELATIONS
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
 }
 
 model DoctorProfile {
-  id                String   @id @default(uuid())
-  userId            String   @unique
-  specialties       String[]
-  yearsOfExperience Int
-  educationLevel    String
-  institution       String
-  totalPatients     Int?
-  perHourRate       BigInt
-  daysOfOperation   String[]
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                     String   @id @default(uuid())
+  userId                 String   @unique
+  specialties            String[]
+  yearsOfExperience      Int
+  educationLevel         String
+  institution            String
+  appointmentSlotMinutes Int      @default(60)
+  totalPatients          Int?
+  bio                    String?
+  perHourRate            BigInt
+  daysOfOperation        String[]
+  averageRating          Float?   @default(0)
+  totalReviews           Int      @default(0)
+
+  // restrict it to only in_person, virtual, or both
+  modesOfConsultation String[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments        Appointment[]
+  reviews             Review[]
+
+  @@map("doctor_profiles")
 }
 
 model Appointment {
   id                   String             @id @default(uuid())
   appointmentSessionId String             @unique
-  appointmentSession   AppointmentSession @relation(fields: [appointmentSessionId], references: [id])
   context              String
-  date                 DateTime
-  time                 DateTime
+  scheduledStartAt     DateTime
+  scheduledEndAt       DateTime
   conditionTitle       String
   images               String[]
   patientId            String
+  idempotencyKey       String?            @unique
+  // Money in pesewas
+  priceAtBookingMinor  Int
   doctorId             String
   status               AppointmentStatus  @default(PENDING)
   type                 AppointmentType    @default(IN_PERSON)
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
   appointmentLogs      AppointmentLog[]
-  payment              payment?
+  payment              Payment?
+  appointmentSession   AppointmentSession @relation(fields: [appointmentSessionId], references: [id])
+  doctor               DoctorProfile      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patient              PatientProfile     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, scheduledStartAt])
+  @@index([status])
+  @@index([doctorId, scheduledStartAt])
+  @@index([patientId, scheduledStartAt])
+}
+
+model Review {
+  id       String @id @default(uuid())
+  doctorId String
+  rating   Int?
+  notes    String
+
+  doctor DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model AppointmentLog {
-  id            String            @id @default(uuid())
-  appointmentId String            @unique
-  status        AppointmentStatus
-  changedTo     AppointmentStatus
-  changedBy     String
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  id             String            @id @default(uuid())
+  appointmentId  String
+  previousStatus AppointmentStatus
+  newStatus      AppointmentStatus
+  changedBy      String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
   // RELATIONS
-  appointment   Appointment       @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  appointment    Appointment       @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  changedByUser  User              @relation(fields: [changedBy], references: [id], onDelete: Cascade)
 }
 
 model AppointmentSession {
-  id           String       @id @default(uuid())
-  startTime    DateTime
-  endTime      DateTime
-  date         DateTime
-  rating       Int?
-  notes        String
+  id        String   @id @default(uuid())
+  startTime DateTime
+  endTime   DateTime
+  date      DateTime
+
   prescription String
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   appointment  Appointment?
 }
 
-model payment {
+model Payment {
   id            String   @id @default(uuid())
-  total         BigInt
+  // Money in pesewas
+  total         Int
   appointmentId String   @unique
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -113,18 +156,21 @@ model payment {
   // RELATIONS
   appointment Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
   transaction Transaction?
+
+  @@map("payments")
 }
 
 model Transaction {
-  id        String        @id @default(uuid())
-  paymentId String        @unique
-  amount    Float
-  reference String        @unique
-  status    PaymentStatus @default(PENDING)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  id          String        @id @default(uuid())
+  paymentId   String        @unique
+  //money in pesewas
+  amountMinor Int
+  reference   String        @unique
+  status      PaymentStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
-  payment payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 }
 
 enum PaymentStatus {
@@ -145,17 +191,20 @@ model Session {
 
   @@index([userId])
   @@index([sessionToken])
+  @@index([expires])
 }
 
 model Token {
-  id        String   @id @default(uuid())
-  token     String   @unique
+  id        String    @id @default(uuid())
+  token     String    @unique
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   expires   DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  type      TokenType @default(EMAIL_VERIFICATION)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
+  @@unique([userId, type])
   @@index([userId])
   @@index([token])
 }
@@ -166,10 +215,18 @@ enum Role {
   PATIENT
 }
 
+enum TokenType {
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
 enum AppointmentStatus {
   PENDING
   RESCHEDULED
   APPROVED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
 }
 
 enum AppointmentType {
