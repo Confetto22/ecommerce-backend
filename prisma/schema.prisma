@@ -29,6 +29,7 @@ model User {
   state           String
   country         String
   emailVerifiedAt DateTime?
+  refreshToken    String?
 
   // Relationships
   sessions        Session[] // User sessions
