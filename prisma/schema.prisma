@@ -70,14 +70,20 @@ model DoctorProfile {
   totalReviews           Int      @default(0)
 
   // restrict it to only in_person, virtual, or both
-  modesOfConsultation String[]
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
-  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  appointments        Appointment[]
-  reviews             Review[]
+  modeOfConsultation consultationTypes @default(IN_PERSON)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments       Appointment[]
+  reviews            Review[]
 
   @@map("doctor_profiles")
+}
+
+enum consultationTypes {
+  VIRTUAL
+  IN_PERSON
+  BOTH
 }
 
 model Appointment {

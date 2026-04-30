@@ -8,6 +8,8 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { PrismaModule } from './infrastructure/database/prisma.module';
+import { PatientModule } from './modules/patient/patient.module';
+import { DoctorModule } from './modules/doctor/doctor.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -22,6 +24,8 @@ import { PrismaModule } from './infrastructure/database/prisma.module';
     PrismaModule,
     AuthModule,
     UserModule,
+    PatientModule,
+    DoctorModule,
   ],
   controllers: [AppController],
   providers: [
