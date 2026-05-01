@@ -14,22 +14,20 @@ datasource db {
 }
 
 model User {
-  id              String    @id @default(uuid())
-  firstname       String
-  lastname        String
-  email           String    @unique
-  location        String
-  phone           String
-  password        String
-  role            Role      @default(PATIENT)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  profilePhoto    String?
-  city            String
-  state           String
-  country         String
-  emailVerifiedAt DateTime?
-  refreshToken    String?
+  id           String     @id @default(uuid())
+  username     String
+  email        String     @unique
+  password     String
+  role         Role       @default(PATIENT)
+  country      String
+  gender       GenderType
+  city         String
+  refreshToken String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  // profilePhoto    String?
+  // state           String
+  // emailVerifiedAt DateTime?
 
   // Relationships
   sessions        Session[] // User sessions
@@ -43,11 +41,22 @@ model User {
   @@map("users")
 }
 
+enum GenderType {
+  MALE
+  FEMALE
+}
+
 model PatientProfile {
-  id        String   @id @default(uuid())
-  userId    String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  dateOfBirth           DateTime
+  bloodType             String?
+  allergies             String[]
+  medicalConditions     String[]
+  emergencyContactPhone String?
+  emergencyContactName  String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   // RELATIONS
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -55,29 +64,45 @@ model PatientProfile {
 }
 
 model DoctorProfile {
-  id                     String   @id @default(uuid())
-  userId                 String   @unique
-  specialties            String[]
+  id                     String            @id @default(uuid())
+  userId                 String            @unique
+  photo                  String?
   yearsOfExperience      Int
   educationLevel         String
   institution            String
-  appointmentSlotMinutes Int      @default(60)
-  totalPatients          Int?
+  perHourRate            Int
+  totalRatings           Int               @default(0)
+  averageRating          Float?            @default(0)
+  appointmentSlotMinutes Int               @default(60)
   bio                    String?
-  perHourRate            BigInt
-  daysOfOperation        String[]
-  averageRating          Float?   @default(0)
-  totalReviews           Int      @default(0)
+  modeOfConsultation     consultationTypes @default(IN_PERSON)
+
+  // specialties            String[]
+  // totalPatients          Int?
+  // daysOfOperation        String[]
 
   // restrict it to only in_person, virtual, or both
-  modeOfConsultation consultationTypes @default(IN_PERSON)
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  appointments       Appointment[]
-  reviews            Review[]
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+  reviews      Review[]
+  availability DoctorAvailability[]
 
   @@map("doctor_profiles")
+}
+
+model DoctorAvailability {
+  id        String        @id @default(uuid())
+  doctorId  String
+  weekday   Int? // 0..6 for RECURRING
+  date      DateTime? // for OVERRIDE / BLACKOUT
+  startTime String // "HH:mm" in doctor's local timezone
+  endTime   String // "HH:mm"
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  @@index([doctorId, weekday])
+  @@index([doctorId, date])
 }
 
 enum consultationTypes {
@@ -87,27 +112,28 @@ enum consultationTypes {
 }
 
 model Appointment {
-  id                   String             @id @default(uuid())
-  appointmentSessionId String             @unique
+  id                   String              @id @default(uuid())
+  appointmentSessionId String?             @unique
   context              String
   scheduledStartAt     DateTime
   scheduledEndAt       DateTime
   conditionTitle       String
   images               String[]
   patientId            String
-  idempotencyKey       String?            @unique
+  idempotencyKey       String?             @unique
   // Money in pesewas
   priceAtBookingMinor  Int
   doctorId             String
-  status               AppointmentStatus  @default(PENDING)
-  type                 AppointmentType    @default(IN_PERSON)
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  status               AppointmentStatus   @default(PENDING)
+  type                 AppointmentType     @default(IN_PERSON)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
   appointmentLogs      AppointmentLog[]
   payment              Payment?
-  appointmentSession   AppointmentSession @relation(fields: [appointmentSessionId], references: [id])
-  doctor               DoctorProfile      @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-  patient              PatientProfile     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentSession   AppointmentSession? @relation(fields: [appointmentSessionId], references: [id])
+  doctor               DoctorProfile       @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patient              PatientProfile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reviews              Review[]
 
   @@unique([doctorId, scheduledStartAt])
   @@index([status])
@@ -116,12 +142,14 @@ model Appointment {
 }
 
 model Review {
-  id       String @id @default(uuid())
-  doctorId String
-  rating   Int?
-  notes    String
+  id            String @id @default(uuid())
+  doctorId      String
+  rating        Int?
+  notes         String
+  appointmentId String
 
-  doctor DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctor      DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  appointment Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -146,7 +174,7 @@ model AppointmentSession {
   endTime   DateTime
   date      DateTime
 
-  prescription String
+  prescription String?
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   appointment  Appointment?
