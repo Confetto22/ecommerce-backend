@@ -37,10 +37,7 @@ export class DoctorService {
           perHourRate: dto.perHourRate,
           appointmentSlotMinutes: dto.appointmentSlotMinutes ?? undefined,
           bio: dto.bio,
-          photo: dto.photo,
           modeOfConsultation: dto.modeOfConsultation,
-          totalRatings: dto.totalRatings ?? undefined,
-          averageRating: dto.averageRating ?? undefined,
         },
       });
 

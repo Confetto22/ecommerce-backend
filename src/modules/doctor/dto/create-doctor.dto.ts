@@ -1,5 +1,7 @@
 import { consultationTypes } from 'generated/prisma/enums';
 import {
+  IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -34,19 +36,26 @@ export class CreateDoctorDto {
   @IsString()
   bio?: string;
 
+  @IsBoolean()
+  published: boolean = false;
+
+  @IsArray()
   @IsOptional()
-  @IsString()
-  photo?: string;
+  specialties?: string[];
+
+  @IsArray()
+  @IsOptional()
+  languages?: string[];
 
   @IsEnum(consultationTypes)
   modeOfConsultation: consultationTypes;
 
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  totalRatings?: number;
+  // @IsOptional()
+  // @IsInt()
+  // @Min(0)
+  // totalRatings?: number;
 
-  @IsOptional()
-  @IsNumber()
-  averageRating?: number;
+  // @IsOptional()
+  // @IsNumber()
+  // averageRating?: number;
 }
