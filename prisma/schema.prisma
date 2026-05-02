@@ -22,6 +22,9 @@ model User {
   country   String
   gender    GenderType
   city      String
+  phone     String?
+  timezone  String     @default("UTC")
+  photo     String?
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   // profilePhoto    String?
@@ -65,7 +68,6 @@ model PatientProfile {
 model DoctorProfile {
   id                     String            @id @default(uuid())
   userId                 String            @unique
-  photo                  String?
   yearsOfExperience      Int
   educationLevel         String
   institution            String
@@ -74,6 +76,9 @@ model DoctorProfile {
   averageRating          Float?            @default(0)
   appointmentSlotMinutes Int               @default(60)
   bio                    String?
+  published              Boolean           @default(false)
+  specialties            String[]
+  languages              String[]
   modeOfConsultation     consultationTypes @default(IN_PERSON)
 
   // specialties            String[]

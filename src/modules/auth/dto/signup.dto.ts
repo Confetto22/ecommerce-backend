@@ -1,4 +1,10 @@
-import { IsEmail, IsEnum, IsString, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
 import { GenderType, Role } from 'generated/prisma/enums';
 
 import { IsValidPassword } from 'src/common/validators/is-valid-password.decorator';
@@ -31,4 +37,15 @@ export class SignupDto {
 
   @IsValidPassword()
   password: string;
+
+  @IsString()
+  @IsOptional()
+  photo?: string;
+
+  @IsString()
+  timezone: string;
+
+  @IsString()
+  @IsOptional()
+  phone?: string;
 }

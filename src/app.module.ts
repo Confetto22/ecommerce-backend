@@ -10,6 +10,7 @@ import { UserModule } from './modules/user/user.module';
 import { PrismaModule } from './infrastructure/database/prisma.module';
 import { PatientModule } from './modules/patient/patient.module';
 import { DoctorModule } from './modules/doctor/doctor.module';
+import { UploadModule } from './modules/upload/upload.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -26,6 +27,7 @@ import { DoctorModule } from './modules/doctor/doctor.module';
     UserModule,
     PatientModule,
     DoctorModule,
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [
