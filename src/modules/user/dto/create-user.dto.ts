@@ -1,4 +1,4 @@
-import type { Role } from 'generated/prisma/enums';
+import type { GenderType, Role } from 'generated/prisma/enums';
 import { Type } from 'class-transformer';
 import {
   IsDate,
@@ -13,14 +13,13 @@ import {
 export class CreateUserDto {
   @IsString()
   @MinLength(3)
-  firstname: string;
-
-  @IsString()
-  @MinLength(3)
-  lastname: string;
+  username: string;
 
   @IsEmail()
   email: string;
+
+  @IsIn(['MALE', 'FEMALE'])
+  gender: GenderType;
 
   @IsString()
   location: string;

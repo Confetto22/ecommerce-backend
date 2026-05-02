@@ -1,67 +1,58 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
-import { Prisma } from 'generated/prisma/client';
+import { Prisma, Role } from 'generated/prisma/client';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
-import { UserService } from '../user/user.service';
 import { PrismaService } from 'src/infrastructure/database/prisma.service';
+import { User } from '../user/entities/user.entity';
 
 @Injectable()
 export class PatientService {
-  constructor(
-    private readonly userService: UserService,
-    private readonly db: PrismaService,
-  ) {}
-  async createPatient(createPatientDto: CreatePatientDto) {
-    //  check existence of patient from user Details email before allowing them to be a patient
+  constructor(private readonly db: PrismaService) {}
 
-    const user = await this.userService.getuserById(createPatientDto.userId);
-    if (!user) {
-      throw new NotFoundException('You must first sign up');
+  async createForUser(user: User, dto: CreatePatientDto) {
+    if (user.role !== Role.PATIENT) {
+      throw new ForbiddenException(
+        'Only accounts with role PATIENT can create a patient profile. Sign up with role PATIENT first.',
+      );
     }
 
-    // prevent duplicate patient sign up
-    const existingPatient = await this.db.patientProfile.findUnique({
+    const existingProfile = await this.db.patientProfile.findUnique({
       where: { userId: user.id },
     });
-    if (existingPatient) {
+    if (existingProfile) {
       throw new ConflictException('Patient profile already exists');
     }
 
-    // and check the role if they exist
-    if (user.role === 'PATIENT') {
-      try {
-        const patient = await this.db.patientProfile.create({
-          data: {
-            userId: user.id,
-          },
-        });
+    try {
+      const patient = await this.db.patientProfile.create({
+        data: {
+          userId: user.id,
+          dateOfBirth: dto.dateOfBirth,
+          bloodType: dto.bloodType,
+          allergies: dto.allergies ?? [],
+          medicalConditions: dto.medicalConditions ?? [],
+          emergencyContactPhone: dto.emergencyContactPhone,
+          emergencyContactName: dto.emergencyContactName,
+        },
+      });
 
-        // set patientProfile field on User Model to current patient created
-        const updatedUser = await this.userService.updateUser(user.id, {
-          patientProfile: patient.id,
-        });
-        return {
-          message: 'patient added successfully',
-          updatedUser,
-          patient,
-        };
-      } catch (error) {
-        // Protect against concurrent requests creating same profile at once.
-        if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === 'P2002'
-        ) {
-          throw new ConflictException('Patient profile already exists');
-        }
-        throw error;
+      return {
+        message: 'Patient profile created successfully',
+        patient,
+      };
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('Patient profile already exists');
       }
-    } else {
-      throw new UnauthorizedException('You did not sign up as a patient!');
+      throw error;
     }
   }
 
@@ -70,11 +61,8 @@ export class PatientService {
       include: {
         user: {
           select: {
-            firstname: true,
-            lastname: true,
+            username: true,
             email: true,
-            phone: true,
-            profilePhoto: true,
           },
         },
       },
@@ -88,7 +76,7 @@ export class PatientService {
   async updatePatient(id: string, updatePatientDto: UpdatePatientDto) {
     const patient = await this.verifyPatient(id);
 
-    const updatedPatient = await this.db.patientProfile.update({
+    await this.db.patientProfile.update({
       where: {
         id: patient?.id,
       },
@@ -97,7 +85,7 @@ export class PatientService {
       },
     });
     return {
-      message: `${patient?.user?.firstname} updated successfully`,
+      message: `${patient?.user?.username} updated successfully`,
     };
   }
 
@@ -116,11 +104,8 @@ export class PatientService {
       include: {
         user: {
           select: {
-            firstname: true,
-            lastname: true,
+            username: true,
             email: true,
-            phone: true,
-            profilePhoto: true,
           },
         },
       },
