@@ -1,75 +1,67 @@
-import { Response } from 'express';
-import { ConfigService } from '@nestjs/config';
+import type { Response, CookieOptions } from 'express';
+import type { ConfigService } from '@nestjs/config';
+import ms, { type StringValue } from 'ms';
+
+const ACCESS_COOKIE = 'accessToken';
+const REFRESH_COOKIE = 'refreshToken';
+
+/**
+ * Cookies are the only auth transport. Same SameSite/secure rules across
+ * set / clear so the browser actually deletes them in production.
+ */
+function baseOptions(configService: ConfigService): CookieOptions {
+  const isProduction =
+    configService.getOrThrow<string>('NODE_ENV') === 'production';
+
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    path: '/',
+  };
+}
+
+function durationFromConfig(
+  configService: ConfigService,
+  key: string,
+  fallback: StringValue,
+): number {
+  const raw = configService.get<string>(key) ?? fallback;
+  const value = ms(raw as StringValue);
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw new Error(
+      `Invalid duration for ${key}: "${raw}". Use values like "15m", "7d".`,
+    );
+  }
+  return value;
+}
 
 export class CookieHelper {
-  /**
-   * Set access token cookie
-   */
   static setAccessTokenCookie(
     res: Response,
     token: string,
     configService: ConfigService,
   ): void {
-    const isProduction =
-      configService.getOrThrow<string>('NODE_ENV') === 'production';
-    const maxAge = 15 * 60 * 1000; // 15 minutes
-
-    res.cookie('accessToken', token, {
-      httpOnly: true,
-      secure: isProduction, // HTTPS only in production
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge,
-      path: '/',
+    res.cookie(ACCESS_COOKIE, token, {
+      ...baseOptions(configService),
+      maxAge: durationFromConfig(configService, 'JWT_ACCESS_EXPIRATION', '15m'),
     });
   }
 
-  /**
-   * Set refresh token cookie
-   * @param res - Express response object
-   * @param token - Refresh token
-   * @param configService - Config service for environment variables
-   * @param rememberMe - If true, cookie expires in 90 days, otherwise 7 days
-   */
   static setRefreshTokenCookie(
     res: Response,
     token: string,
     configService: ConfigService,
-    rememberMe: boolean = false,
   ): void {
-    const isProduction =
-      configService.getOrThrow<string>('NODE_ENV') === 'production';
-    const maxAge = rememberMe
-      ? 90 * 24 * 60 * 60 * 1000 // 90 days
-      : 7 * 24 * 60 * 60 * 1000; // 7 days
-
-    res.cookie('refreshToken', token, {
-      httpOnly: true,
-      secure: isProduction, // HTTPS only in production
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge,
-      path: '/',
+    res.cookie(REFRESH_COOKIE, token, {
+      ...baseOptions(configService),
+      maxAge: durationFromConfig(configService, 'JWT_REFRESH_EXPIRATION', '7d'),
     });
   }
 
-  /**
-   * Clear both token cookies
-   */
   static clearTokenCookies(res: Response, configService: ConfigService): void {
-    const isProduction =
-      configService.getOrThrow<string>('NODE_ENV') === 'production';
-
-    res.clearCookie('accessToken', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      path: '/',
-    });
-
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      path: '/',
-    });
+    const opts = baseOptions(configService);
+    res.clearCookie(ACCESS_COOKIE, opts);
+    res.clearCookie(REFRESH_COOKIE, opts);
   }
 }

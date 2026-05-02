@@ -1,48 +1,70 @@
 import {
-  ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { UpdateAuthDto } from './dto/update-auth.dto';
-import { UserService } from '../user/user.service';
-import { JwtService } from '@nestjs/jwt';
-import { SignupDto } from './dto/signup.dto';
-import { User } from '../user/entities/user.entity';
-import { PrismaService } from 'src/infrastructure/database/prisma.service';
-import { compare, hash } from 'bcryptjs';
-import type { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
-import { JwtPayload } from 'src/common/interfaces/jwt-payload.interface';
-import type { StringValue } from 'ms';
+import { JwtService } from '@nestjs/jwt';
+import { compare, hash } from 'bcryptjs';
 import * as crypto from 'crypto';
-import { TokenType } from 'generated/prisma/enums';
 import { addHours } from 'date-fns';
+import type { Response } from 'express';
+import { TokenType } from 'generated/prisma/enums';
+import ms, { type StringValue } from 'ms';
+import { v4 as uuidv4 } from 'uuid';
+
+import { CookieHelper } from 'src/common/utils/cookie-helper';
+import type {
+  JwtAccessPayload,
+  JwtRefreshPayload,
+} from 'src/common/interfaces/jwt-payload.interface';
+import type { RefreshRequestUser } from 'src/common/types/auth-request.types';
+import { PrismaService } from 'src/infrastructure/database/prisma.service';
+
+import { User } from '../user/entities/user.entity';
+import { SignupDto } from './dto/signup.dto';
+
+const BCRYPT_COST = 12;
+const PASSWORD_RESET_TTL_HOURS = 1;
+const GENERIC_FORGOT_PASSWORD_MESSAGE =
+  'If an account with that email exists, a password reset link has been sent.';
+const GENERIC_SIGNUP_MESSAGE =
+  'Registration successful. Please check your email to verify your account before logging in.';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
-    private readonly userService: UserService,
     private readonly db: PrismaService,
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
   ) {}
 
-  async signup(
-    registerData: SignupDto,
-  ): Promise<{ user: User; message: string }> {
-    // check if user exists
-    const foundUser = await this.db.user.findUnique({
-      where: { email: registerData?.email },
+  // ---------------------------------------------------------------------------
+  // Signup
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Signup is intentionally enumeration-safe: it returns the same response
+   * whether or not the email is already in use. When email is wired, the
+   * "already registered" path should send a "you already have an account"
+   * email instead of creating a new user.
+   */
+  async signup(registerData: SignupDto): Promise<{ message: string }> {
+    const existing = await this.db.user.findUnique({
+      where: { email: registerData.email },
+      select: { id: true },
     });
-    if (foundUser) {
-      throw new ConflictException('User already exists');
+
+    if (existing) {
+      this.logger.warn(`Signup attempt for existing email`);
+      return { message: GENERIC_SIGNUP_MESSAGE };
     }
 
-    // hash password and save
-    const hashedPassword = await hash(registerData?.password, 12);
+    const hashedPassword = await hash(registerData.password, BCRYPT_COST);
 
-    const user = await this.db.user.create({
+    await this.db.user.create({
       data: {
         username: registerData.username,
         gender: registerData.gender,
@@ -54,251 +76,378 @@ export class AuthService {
       },
     });
 
+    return { message: GENERIC_SIGNUP_MESSAGE };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Login + credential check
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Used by LocalStrategy. Logs the underlying reason for failures but only
+   * surfaces a generic "credentials are not valid" to avoid user enumeration.
+   */
+  async verifyUser(email: string, password: string): Promise<User> {
+    const user = await this.db.user.findUnique({ where: { email } });
+
+    if (!user) {
+      this.logger.debug(`Login failed: no user for email`);
+      throw new UnauthorizedException('Credentials are not valid');
+    }
+    if (!user.password) {
+      this.logger.warn(`Login failed: user has no password (OAuth-only?)`);
+      throw new UnauthorizedException('Credentials are not valid');
+    }
+
+    const passwordMatch = await compare(password, user.password);
+    if (!passwordMatch) {
+      throw new UnauthorizedException('Credentials are not valid');
+    }
+
+    return new User(user);
+  }
+
+  /**
+   * Issues a fresh session + token pair, sets cookies, returns the
+   * sanitized user. Caller is the controller; nothing else stays around.
+   */
+  async login(user: User, res: Response): Promise<{ user: User }> {
+    const { accessToken, refreshToken } = await this.issueTokens(
+      user.id,
+      user.role,
+    );
+
+    CookieHelper.setAccessTokenCookie(res, accessToken, this.configService);
+    CookieHelper.setRefreshTokenCookie(res, refreshToken, this.configService);
+
+    return { user };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Logout
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Terminate the current session only. The session id comes from the refresh
+   * cookie; we don't trust the access token to identify a session because it
+   * doesn't carry one.
+   */
+  async logout(
+    userId: string,
+    refreshToken: string | undefined,
+    res: Response,
+  ): Promise<void> {
+    if (refreshToken) {
+      try {
+        const payload = await this.jwtService.verifyAsync<JwtRefreshPayload>(
+          refreshToken,
+          {
+            secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+          },
+        );
+        if (payload.tokenId && payload.sub === userId) {
+          await this.db.session.deleteMany({
+            where: { id: payload.tokenId, userId },
+          });
+        }
+      } catch {
+        // Expired or tampered refresh token: nothing to invalidate, just
+        // clear cookies. Don't surface this to the client.
+      }
+    }
+
+    CookieHelper.clearTokenCookies(res, this.configService);
+  }
+
+  /**
+   * Terminate every session for the user (e.g., "log out everywhere",
+   * post-password-reset, suspected compromise).
+   */
+  async logoutAll(userId: string, res: Response): Promise<void> {
+    await this.db.session.deleteMany({ where: { userId } });
+    CookieHelper.clearTokenCookies(res, this.configService);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Refresh + rotation + reuse detection
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Strategy-level verifier. Returns the minimal shape the controller needs.
+   *
+   * Reuse detection: if a refresh token's signature is valid but its session
+   * is gone, OR its hash doesn't match the stored one, we assume token theft
+   * and revoke every session for that user (RFC 6749 §10.4 / OWASP).
+   */
+  async verifyRefreshToken(
+    rawRefreshToken: string | undefined,
+    payload: JwtRefreshPayload,
+  ): Promise<RefreshRequestUser> {
+    if (!rawRefreshToken || !payload?.sub || !payload?.tokenId) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const session = await this.db.session.findUnique({
+      where: { id: payload.tokenId },
+    });
+
+    if (!session || session.userId !== payload.sub) {
+      this.logger.warn(
+        `Refresh reuse detected (no session) for user ${payload.sub}; revoking all sessions`,
+      );
+      await this.invalidateAllSessions(payload.sub);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (session.expires.getTime() <= Date.now()) {
+      await this.db.session
+        .delete({ where: { id: session.id } })
+        .catch(() => {});
+      throw new UnauthorizedException('Refresh token expired');
+    }
+
+    const stored = Buffer.from(session.sessionToken, 'hex');
+    const expected = Buffer.from(this.hashToken(rawRefreshToken), 'hex');
+    const hashesMatch =
+      stored.length === expected.length &&
+      stored.length > 0 &&
+      crypto.timingSafeEqual(stored, expected);
+
+    if (!hashesMatch) {
+      this.logger.warn(
+        `Refresh reuse detected (hash mismatch) for user ${payload.sub}; revoking all sessions`,
+      );
+      await this.invalidateAllSessions(payload.sub);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    return { userId: payload.sub, sessionId: session.id };
+  }
+
+  /**
+   * Rotates the session: deletes the old one, issues a new pair tied to a
+   * fresh session id, sets cookies, returns the sanitized user.
+   *
+   * Single rotation transaction for the delete + create would be ideal; we
+   * keep it simple here and rely on reuse detection if the old token is
+   * replayed before the new one lands client-side.
+   */
+  async refreshAccessToken(
+    refresher: RefreshRequestUser,
+    res: Response,
+  ): Promise<{ user: User }> {
+    const user = await this.db.user.findUnique({
+      where: { id: refresher.userId },
+    });
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Atomic claim: only the request that wins the delete is allowed to
+    // mint new tokens. A concurrent refresher will see P2025 here, which we
+    // treat as a reuse signal and bail out cleanly.
+    try {
+      await this.db.session.delete({ where: { id: refresher.sessionId } });
+    } catch {
+      await this.invalidateAllSessions(refresher.userId);
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const { accessToken, refreshToken } = await this.issueTokens(
+      user.id,
+      user.role,
+    );
+
+    CookieHelper.setAccessTokenCookie(res, accessToken, this.configService);
+    CookieHelper.setRefreshTokenCookie(res, refreshToken, this.configService);
+
+    return { user: new User(user) };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Forgot / reset password
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Generates a password reset token (raw + hash), upserts a single active
+   * row per user, and returns the *raw* token so the caller (you, when you
+   * wire email) can email it. The DB only ever stores the hash.
+   *
+   * Returns null when the email maps to no eligible user. The caller should
+   * still respond with a generic success message either way.
+   */
+  async forgotPassword(
+    email: string,
+  ): Promise<{ message: string; rawToken?: string; userId?: string }> {
+    const user = await this.db.user.findUnique({
+      where: { email },
+      select: { id: true, password: true },
+    });
+
+    if (!user || !user.password) {
+      // Don't reveal whether the user exists or how they signed up.
+      return { message: GENERIC_FORGOT_PASSWORD_MESSAGE };
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = this.hashToken(rawToken);
+    const expires = addHours(new Date(), PASSWORD_RESET_TTL_HOURS);
+
+    await this.db.token.upsert({
+      where: {
+        userId_type: { userId: user.id, type: TokenType.PASSWORD_RESET },
+      },
+      create: {
+        token: hashedToken,
+        type: TokenType.PASSWORD_RESET,
+        userId: user.id,
+        expires,
+      },
+      update: {
+        token: hashedToken,
+        expires,
+      },
+    });
+
     return {
-      user: new User(user),
-      message:
-        'Registration successful! Please check your email to verify your account before logging in.',
+      message: GENERIC_FORGOT_PASSWORD_MESSAGE,
+      rawToken,
+      userId: user.id,
     };
   }
 
-  async login(user: User, res: Response) {
-    const isProduction =
-      this.configService.getOrThrow<string>('NODE_ENV') === 'production';
-    const accessMaxAge = 15 * 60 * 1000; // 15 minutes
-    const refreshMaxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+  /**
+   * Validates the *raw* token from the user, hashes it, looks up the row,
+   * sets the new password, and burns every session belonging to the user.
+   */
+  async resetPassword(
+    rawToken: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    const userId = await this.consumePasswordResetToken(rawToken);
 
-    const tokenPayload: JwtPayload = {
-      sub: user?.id,
-      role: user?.role,
-    };
+    const hashedPassword = await hash(newPassword, BCRYPT_COST);
+    await this.db.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
 
-    const accessToken = this.jwtService.sign(tokenPayload, {
+    // Force re-login on every device after a reset.
+    await this.invalidateAllSessions(userId);
+
+    return { message: 'Password has been reset successfully' };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Maintenance helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Best called by a scheduled job. Removes expired session and password
+   * reset rows so they don't pile up forever.
+   */
+  async cleanupExpiredAuthRecords(): Promise<{
+    sessions: number;
+    tokens: number;
+  }> {
+    const now = new Date();
+    const [sessions, tokens] = await this.db.$transaction([
+      this.db.session.deleteMany({ where: { expires: { lt: now } } }),
+      this.db.token.deleteMany({ where: { expires: { lt: now } } }),
+    ]);
+    return { sessions: sessions.count, tokens: tokens.count };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Creates a session row with a deterministic id, signs a refresh JWT
+   * carrying that id, then stores the SHA-256 of the JWT in the session.
+   * This makes the refresh JWT itself the secret — but only useful when
+   * paired with the session row's hash, which we delete on rotation.
+   */
+  private async issueTokens(
+    userId: string,
+    role: User['role'],
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    const tokenId = uuidv4();
+
+    const refreshTtlMs = this.durationFromConfig(
+      'JWT_REFRESH_EXPIRATION',
+      '7d',
+    );
+
+    const refreshToken = await this.signRefreshToken({ sub: userId, tokenId });
+    const accessToken = await this.signAccessToken({ sub: userId, role });
+
+    await this.db.session.create({
+      data: {
+        id: tokenId,
+        userId,
+        sessionToken: this.hashToken(refreshToken),
+        expires: new Date(Date.now() + refreshTtlMs),
+      },
+    });
+
+    return { accessToken, refreshToken };
+  }
+
+  private async signAccessToken(payload: JwtAccessPayload): Promise<string> {
+    return this.jwtService.signAsync(payload, {
       secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
       expiresIn: this.configService.getOrThrow<StringValue>(
         'JWT_ACCESS_EXPIRATION',
       ),
     });
+  }
 
-    const refreshToken = this.jwtService.sign(tokenPayload, {
+  private async signRefreshToken(payload: JwtRefreshPayload): Promise<string> {
+    return this.jwtService.signAsync(payload, {
       secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
       expiresIn: this.configService.getOrThrow<StringValue>(
         'JWT_REFRESH_EXPIRATION',
       ),
     });
-
-    const hashedRefreshToken = await hash(refreshToken, 12);
-    await this.userService.updateUser(user.id, {
-      refreshToken: hashedRefreshToken,
-    });
-
-    res.cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge: accessMaxAge,
-      path: '/',
-    });
-    res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      maxAge: refreshMaxAge,
-      path: '/',
-    });
   }
 
-  async logoutAll(userId: string, res: Response): Promise<{ message: string }> {
-    await this.invalidateAllSessions(userId);
-
-    // Clear token cookies
-    this.clearTokenCookies(res, this.configService);
-
-    return {
-      message: 'Logged out successfully',
-    };
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
   }
 
-  async verifyUser(email: string, password: string) {
-    try {
-      const user = await this.userService.getUserByEmail(email);
-      if (!user.password) {
-        throw new UnauthorizedException();
-      }
-      const passwordMatch = await compare(password, user.password);
-      if (!passwordMatch) {
-        throw new UnauthorizedException();
-      }
-      return user;
-    } catch (err) {
-      throw new UnauthorizedException('credentials are not valid.');
+  private durationFromConfig(key: string, fallback: StringValue): number {
+    const raw = this.configService.get<string>(key) ?? fallback;
+    const value = ms(raw as StringValue);
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      throw new Error(`Invalid duration for ${key}: "${raw}"`);
     }
+    return value;
   }
 
-  async verifyRefreshToken(refreshToken: string, userId: string) {
-    const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user?.refreshToken) {
-      throw new UnauthorizedException();
-    }
-    const ok = await compare(refreshToken, user.refreshToken);
-    if (!ok) {
-      throw new UnauthorizedException();
-    }
-    return new User(user);
-  }
+  private async consumePasswordResetToken(rawToken: string): Promise<string> {
+    const hashedToken = this.hashToken(rawToken);
 
-  async forgotPassword(email): Promise<{ message: string }> {
-    // fetch user by their email to confirm their existence
-    const user = await this.db.user.findUnique({
-      where: {
-        email,
-      },
-    });
-
-    // Don't reveal if user exists or not (security best practice)
-    // Even if user does not exist, return success message to prevent email enumeration
-    if (!user) {
-      return {
-        message:
-          'If an account with that email exists, a password reset link has been sent.',
-      };
-    }
-    // Check if user has a password (OAuth users might not have one)
-
-    // Even if user does not have a password return success message to prevent account enumeration
-    if (!user.password) {
-      return {
-        message:
-          'If an account with that email exists, a password reset link has been sent.',
-      };
-    }
-    // Generate password reset token
-    const resetToken = await this.generatePasswordResetToken(user.id);
-    // Send password reset email via email service
-    // If there's an error, Don't throw it to prevent email enumeration
-    try {
-    } catch (error) {}
-    // Always return success message to prevent email enumeration
-    return {
-      message:
-        'If an account with that email exists, a password reset link has been sent.',
-    };
-  }
-
-  async resetPassword(
-    token: string,
-    newPassword: string,
-  ): Promise<{ message: string }> {
-    // validate token
-    const userId = await this.validatePasswordResetToken(token);
-    // Hash new password
-    const hashedPassword = await hash(newPassword, 12);
-    // Update user password
-    const updateduser = await this.db.user.update({
-      where: { id: userId },
-      data: { password: hashedPassword },
-    });
-    // Delete the token after use
-    await this.deleteToken(token);
-    // Invalidate all existing sessions for security
-    await this.invalidateAllSessions(userId);
-
-    return {
-      message: 'Password has been reset successfully',
-    };
-  }
-
-  /**
-   * Generate password reset token
-   */
-  async generatePasswordResetToken(userId: string): Promise<string> {
-    // Generate a random token
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const hashedToken = crypto
-      .createHash('sha256')
-      .update(rawToken)
-      .digest('hex');
-
-    // Store token in database with expiration (1 hour)
-    const expiresAt = addHours(new Date(), 1);
-
-    await this.db.token.create({
-      data: {
-        token: hashedToken,
-        type: TokenType.PASSWORD_RESET,
-        userId,
-        expires: expiresAt,
-      },
-    });
-
-    return hashedToken;
-  }
-
-  /**
-   * Validate password reset token
-   */
-  async validatePasswordResetToken(token: string): Promise<string> {
     const tokenRecord = await this.db.token.findUnique({
-      where: { token },
-      include: { user: true },
+      where: { token: hashedToken },
     });
 
-    if (!tokenRecord) {
-      throw new UnauthorizedException('Invalid reset token');
+    if (!tokenRecord || tokenRecord.type !== TokenType.PASSWORD_RESET) {
+      throw new UnauthorizedException('Invalid or expired reset token');
+    }
+    if (tokenRecord.expires.getTime() <= Date.now()) {
+      await this.db.token.delete({ where: { id: tokenRecord.id } }).catch(() => {});
+      throw new UnauthorizedException('Invalid or expired reset token');
     }
 
-    if (tokenRecord.type !== TokenType.PASSWORD_RESET) {
-      throw new UnauthorizedException('Invalid token type');
-    }
-
-    if (tokenRecord.expires < new Date()) {
-      throw new UnauthorizedException('Token has expired');
-    }
+    // Single-use: burn the token whether the rest of the flow succeeds
+    // or fails — in either case we never want it reusable.
+    await this.db.token.delete({ where: { id: tokenRecord.id } });
 
     return tokenRecord.userId;
   }
 
-  /**
-   * Delete a token after use
-   */
-  async deleteToken(token: string): Promise<void> {
-    await this.db.token
-      .delete({
-        where: { token },
-      })
-      .catch(() => {
-        // Token might already be deleted, ignore error
-      });
-  }
-
-  /**
-   * Invalidate all sessions for a user (without clearing cookies)
-   * Used internally for password reset
-   */
-  async invalidateAllSessions(userId: string): Promise<void> {
-    await this.db.session.deleteMany({
-      where: { userId },
-    });
-  }
-
-  /**
-   * Clear both token cookies
-   */
-  private clearTokenCookies(res: Response, configService: ConfigService) {
-    const isProduction =
-      configService.getOrThrow<string>('NODE_ENV') === 'production';
-
-    res.clearCookie('accessToken', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      path: '/',
-    });
-
-    res.clearCookie('refreshToken', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'strict' : 'lax',
-      path: '/',
-    });
+  private async invalidateAllSessions(userId: string): Promise<void> {
+    await this.db.session.deleteMany({ where: { userId } });
   }
 }

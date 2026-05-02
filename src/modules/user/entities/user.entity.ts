@@ -1,24 +1,24 @@
 import { Exclude } from 'class-transformer';
-import type { Role } from 'generated/prisma/enums';
+import type { GenderType, Role } from 'generated/prisma/enums';
+
 import { Session } from './session.entity';
 
+/**
+ * API representation of a User. Mirrors the Prisma `User` model exactly.
+ * Sensitive fields are decorated with `@Exclude()`; pair this with
+ * `ClassSerializerInterceptor` (or do an explicit `instanceToPlain` in
+ * controllers) to keep them out of responses.
+ */
 export class User {
   id: string;
-  firstname: string;
-  lastname: string;
+  username: string;
   email: string;
-  location: string;
-  phone: string;
   role: Role;
+  gender: GenderType;
+  city: string;
+  country: string;
   createdAt: Date;
   updatedAt: Date;
-  profilePhoto: string | null;
-  city: string;
-  state: string;
-  country: string;
-  emailVerifiedAt: Date | null;
-  patientProfile: string | null;
-  doctorProfile: string | null;
 
   @Exclude()
   password?: string;
@@ -27,7 +27,7 @@ export class User {
   sessions?: Session[];
 
   @Exclude()
-  tokens?: any[];
+  tokens?: unknown[];
 
   constructor(partial: Partial<User>) {
     Object.assign(this, partial);
