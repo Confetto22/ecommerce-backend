@@ -1,14 +1,13 @@
-import { IsString, MinLength, Matches } from 'class-validator';
+import { IsString, Length } from 'class-validator';
+
+import { IsValidPassword } from 'src/common/validators/is-valid-password.decorator';
 
 export class ResetPasswordDto {
+  /** Hex-encoded raw token from the reset email (32 random bytes -> 64 chars). */
   @IsString()
+  @Length(64, 64)
   token: string;
 
-  @IsString()
-  @MinLength(8)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      'Password must contain uppercase, lowercase, number, and special character',
-  })
+  @IsValidPassword()
   password: string;
 }

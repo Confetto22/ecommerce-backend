@@ -1,15 +1,13 @@
-import type { GenderType, Role } from 'generated/prisma/enums';
-import { Type } from 'class-transformer';
-import {
-  IsDate,
-  IsEmail,
-  IsIn,
-  IsOptional,
-  IsString,
-  IsStrongPassword,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsEnum, IsString, MinLength } from 'class-validator';
+import { GenderType, Role } from 'generated/prisma/enums';
 
+import { IsValidPassword } from 'src/common/validators/is-valid-password.decorator';
+
+/**
+ * Internal user-create shape. Mirrors the Prisma `User` model. Public
+ * signup uses `SignupDto` instead — this lives here for any future admin
+ * flow that needs to provision users directly.
+ */
 export class CreateUserDto {
   @IsString()
   @MinLength(3)
@@ -18,49 +16,18 @@ export class CreateUserDto {
   @IsEmail()
   email: string;
 
-  @IsIn(['MALE', 'FEMALE'])
+  @IsEnum(GenderType)
   gender: GenderType;
 
-  @IsString()
-  location: string;
-
-  @IsString()
-  phone: string;
-
-  @IsIn(['DOCTOR', 'PATIENT'])
+  @IsEnum(Role)
   role: Role;
-
-  @IsOptional()
-  @IsString()
-  profilePhoto: string | null;
 
   @IsString()
   city: string;
 
   @IsString()
-  state: string;
-
-  @IsString()
   country: string;
 
-  @IsOptional()
-  refreshToken?: string;
-
-  @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  emailVerifiedAt: Date | null;
-
-  @IsOptional()
-  @IsString()
-  patientProfile: string | null;
-
-  @IsOptional()
-  @IsString()
-  doctorProfile: string | null;
-
-  @IsString()
-  @MinLength(8)
-  @IsStrongPassword()
+  @IsValidPassword()
   password: string;
 }

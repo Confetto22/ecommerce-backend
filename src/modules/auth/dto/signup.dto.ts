@@ -1,15 +1,13 @@
-import type { GenderType, Role } from 'generated/prisma/enums';
-import {
-  IsEmail,
-  IsIn,
-  IsString,
-  IsStrongPassword,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsEnum, IsString, MinLength } from 'class-validator';
+import { GenderType, Role } from 'generated/prisma/enums';
+
+import { IsValidPassword } from 'src/common/validators/is-valid-password.decorator';
 
 /**
- * Body for POST /auth/signup only. Profile fields (patient/doctor) belong on
- * POST /patients or POST /doctor after login — do not send them here.
+ * POST /auth/signup
+ *
+ * Profile fields (patient/doctor) belong on POST /patients or POST /doctors
+ * after login. Do not send them here.
  */
 export class SignupDto {
   @IsString()
@@ -19,10 +17,10 @@ export class SignupDto {
   @IsEmail()
   email: string;
 
-  @IsIn(['MALE', 'FEMALE'])
+  @IsEnum(GenderType)
   gender: GenderType;
 
-  @IsIn(['DOCTOR', 'PATIENT'])
+  @IsEnum(Role)
   role: Role;
 
   @IsString()
@@ -31,8 +29,6 @@ export class SignupDto {
   @IsString()
   country: string;
 
-  @IsString()
-  @MinLength(8)
-  @IsStrongPassword()
+  @IsValidPassword()
   password: string;
 }
