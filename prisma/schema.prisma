@@ -89,6 +89,7 @@ model DoctorProfile {
   reviews      Review[]
   availability DoctorAvailability[]
 
+  @@index([userId])
   @@map("doctor_profiles")
 }
 

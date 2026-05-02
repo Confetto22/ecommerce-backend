@@ -6,18 +6,30 @@ import {
   Patch,
   Param,
   Delete,
+  UseGuards,
 } from '@nestjs/common';
 import { PatientService } from './patient.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
+import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
+import { CurrentUser } from 'src/common/decorators/current-user.decorator';
+import { User } from '../user/entities/user.entity';
 
 @Controller('patients')
 export class PatientController {
   constructor(private readonly patientService: PatientService) {}
 
+  /**
+   * Onboard a patient profile for the authenticated user.
+   * The user must already exist (JWT) and have signed up with role PATIENT.
+   */
   @Post()
-  async createPatient(@Body() createPatientDto: CreatePatientDto) {
-    return await this.patientService.createPatient(createPatientDto);
+  @UseGuards(JwtAuthGuard)
+  async createPatient(
+    @CurrentUser() user: User,
+    @Body() createPatientDto: CreatePatientDto,
+  ) {
+    return await this.patientService.createForUser(user, createPatientDto);
   }
 
   @Get()

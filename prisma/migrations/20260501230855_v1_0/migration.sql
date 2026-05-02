@@ -209,6 +209,9 @@ CREATE UNIQUE INDEX "PatientProfile_userId_key" ON "PatientProfile"("userId");
 CREATE UNIQUE INDEX "doctor_profiles_userId_key" ON "doctor_profiles"("userId");
 
 -- CreateIndex
+CREATE INDEX "doctor_profiles_userId_idx" ON "doctor_profiles"("userId");
+
+-- CreateIndex
 CREATE INDEX "DoctorAvailability_doctorId_weekday_idx" ON "DoctorAvailability"("doctorId", "weekday");
 
 -- CreateIndex

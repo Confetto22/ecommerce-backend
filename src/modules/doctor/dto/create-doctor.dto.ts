@@ -1,17 +1,52 @@
 import { consultationTypes } from 'generated/prisma/enums';
+import {
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class CreateDoctorDto {
-  userId: string;
-  specialties: string[];
+  @IsInt()
+  @Min(0)
   yearsOfExperience: number;
+
+  @IsString()
   educationLevel: string;
+
+  @IsString()
   institution: string;
-  appointmentSlotMinutes: number;
-  totalPatients?: number;
-  bio?: string;
+
+  @IsInt()
+  @Min(0)
   perHourRate: number;
-  daysOfOperation: string[];
-  averageRating?: number;
-  totalReviews: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(24 * 60)
+  appointmentSlotMinutes?: number;
+
+  @IsOptional()
+  @IsString()
+  bio?: string;
+
+  @IsOptional()
+  @IsString()
+  photo?: string;
+
+  @IsEnum(consultationTypes)
   modeOfConsultation: consultationTypes;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  totalRatings?: number;
+
+  @IsOptional()
+  @IsNumber()
+  averageRating?: number;
 }

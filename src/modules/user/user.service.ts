@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { User } from './entities/user.entity';
@@ -17,6 +21,20 @@ export class UserService {
 
     return new User(user);
   }
+
+  // async createUser(userData:CreateUserDto) {
+  //   const {email} = userData
+  //   // check existence of user
+  //   const user = await this.db.user.findUnique({
+  //     where: {
+  //       email
+  //     }
+  //   })
+  //   if (user) {
+  //     throw new ConflictException('User already signed up!')
+  //   }
+
+  // }
 
   async getuserById(id: string) {
     const user = await this.db.user.findUnique({
