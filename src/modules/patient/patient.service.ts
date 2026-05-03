@@ -4,15 +4,21 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { Prisma, Role } from 'generated/prisma/client';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { PrismaService } from 'src/infrastructure/database/prisma.service';
 import { User } from '../user/entities/user.entity';
+import { PatientProfile } from './entities/patient-profile.entity';
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class PatientService {
-  constructor(private readonly db: PrismaService) {}
+  constructor(
+    private readonly db: PrismaService,
+    private readonly authService: AuthService,
+  ) {}
 
   async createForUser(user: User, dto: CreatePatientDto) {
     if (user.role !== Role.PATIENT) {
@@ -69,19 +75,64 @@ export class PatientService {
     });
   }
 
-  async findPatient(id: string) {
-    await this.verifyPatient(id);
+  async getSelf(userId: string): Promise<PatientProfile> {
+    const patient = await this.db.patientProfile.findUnique({
+      where: {
+        userId,
+      },
+      include: {
+        user: {
+          omit: {
+            password: true,
+          },
+        },
+      },
+    });
+
+    if (!patient) {
+      throw new NotFoundException('Patient does not exist');
+    }
+
+    const { user, ...profile } = patient;
+    return new PatientProfile({
+      ...profile,
+      user: user ? new User(user) : undefined,
+    });
   }
 
-  async updatePatient(id: string, updatePatientDto: UpdatePatientDto) {
-    const patient = await this.verifyPatient(id);
+  async getPublicProfile(id: string) {
+    // verify Patient profile
+    const patient = await this.db.patientProfile.findUnique({
+      where: {
+        userId: id,
+      },
+      include: {
+        user: {
+          omit: {
+            password: true,
+          },
+        },
+      },
+    });
 
+    if (!patient) {
+      throw new NotFoundException('Patient does not exist');
+    }
+
+    return patient;
+  }
+
+  async updateMyProfile(
+    id: string,
+    updateData: UpdatePatientDto,
+  ): Promise<{ message: string }> {
+    const patient = await this.verifyPatient(id);
     await this.db.patientProfile.update({
       where: {
         id: patient?.id,
       },
       data: {
-        ...updatePatientDto,
+        ...updateData,
       },
     });
     return {
@@ -89,18 +140,26 @@ export class PatientService {
     };
   }
 
-  async deletePatient(id: string) {
-    const patient = await this.verifyPatient(id);
-    await this.db.patientProfile.delete({
-      where: {
-        id: patient.id,
-      },
+  async deletePatient(id: string, res: Response): Promise<{ message: string }> {
+    const user = await this.db.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    await this.authService.logoutAll(user.id, res);
+
+    await this.db.user.delete({
+      where: { id: user.id },
     });
+
+    return {
+      message: `${user.username} deleted successfully`,
+    };
   }
 
   private async verifyPatient(id: string) {
     const patient = await this.db.patientProfile.findUnique({
-      where: { id },
+      where: { userId: id },
       include: {
         user: {
           select: {
@@ -114,6 +173,7 @@ export class PatientService {
     if (!patient) {
       throw new NotFoundException('Patient does not exist');
     }
+
     return patient;
   }
 }

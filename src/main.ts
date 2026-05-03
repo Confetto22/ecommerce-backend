@@ -1,8 +1,10 @@
-import { NestFactory } from '@nestjs/core';
+import { NestFactory, Reflector } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -10,11 +12,17 @@ async function bootstrap() {
   });
 
   app.setGlobalPrefix('api');
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
   app.use(
     helmet({
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
     cookieParser(),
+  );
+
+  app.useGlobalGuards(
+    new JwtAuthGuard(app.get(Reflector)),
+    new RolesGuard(app.get(Reflector)),
   );
 
   app.enableShutdownHooks();

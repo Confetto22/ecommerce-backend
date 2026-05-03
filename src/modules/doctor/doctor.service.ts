@@ -2,12 +2,13 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { Prisma, Role } from 'generated/prisma/client';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
-import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { PrismaService } from 'src/infrastructure/database/prisma.service';
 import { User } from '../user/entities/user.entity';
+import { DoctorProfile } from './entities/doctor-profile.entity';
 
 @Injectable()
 export class DoctorService {
@@ -37,10 +38,7 @@ export class DoctorService {
           perHourRate: dto.perHourRate,
           appointmentSlotMinutes: dto.appointmentSlotMinutes ?? undefined,
           bio: dto.bio,
-          photo: dto.photo,
           modeOfConsultation: dto.modeOfConsultation,
-          totalRatings: dto.totalRatings ?? undefined,
-          averageRating: dto.averageRating ?? undefined,
         },
       });
 
@@ -59,19 +57,24 @@ export class DoctorService {
     }
   }
 
-  findAll() {
-    return `This action returns all doctor`;
-  }
+  async getCurrentDoctorProfile(userId: string): Promise<DoctorProfile> {
+    const doctor = await this.db.doctorProfile.findUnique({
+      where: { userId },
+      include: {
+        user: {
+          omit: { password: true },
+        },
+      },
+    });
 
-  findOne(id: number) {
-    return `This action returns a #${id} doctor`;
-  }
+    if (!doctor) {
+      throw new NotFoundException('Doctor profile not found');
+    }
 
-  update(id: number, updateDoctorDto: UpdateDoctorDto) {
-    return `This action updates a #${id} doctor`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} doctor`;
+    const { user, ...profile } = doctor;
+    return new DoctorProfile({
+      ...profile,
+      user: user ? new User(user) : undefined,
+    });
   }
 }

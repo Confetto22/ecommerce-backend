@@ -1,4 +1,7 @@
+import { Type } from 'class-transformer';
 import {
+  IsArray,
+  IsDate,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -6,16 +9,9 @@ import {
   MinLength,
 } from 'class-validator';
 import { GenderType, Role } from 'generated/prisma/enums';
-
 import { IsValidPassword } from 'src/common/validators/is-valid-password.decorator';
 
-/**
- * POST /auth/signup
- *
- * Profile fields (patient/doctor) belong on POST /patients or POST /doctors
- * after login. Do not send them here.
- */
-export class SignupDto {
+export class PatientUserDto {
   @IsString()
   @MinLength(3)
   username: string;
@@ -37,15 +33,29 @@ export class SignupDto {
 
   @IsValidPassword()
   password: string;
+  @Type(() => Date)
+  @IsDate()
+  dateOfBirth: Date;
 
-  @IsString()
   @IsOptional()
-  photo?: string;
-
   @IsString()
-  timezone: string;
+  bloodType?: string;
 
-  @IsString()
   @IsOptional()
-  phone?: string;
+  @IsArray()
+  @IsString({ each: true })
+  allergies?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  medicalConditions?: string[];
+
+  @IsOptional()
+  @IsString()
+  emergencyContactPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  emergencyContactName?: string;
 }
