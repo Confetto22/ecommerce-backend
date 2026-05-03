@@ -1,8 +1,11 @@
 import { consultationTypes } from 'generated/prisma/enums';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -41,6 +44,9 @@ export class CreateDoctorDto {
 
   @IsArray()
   @IsOptional()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(6)
+  // @IsIn(SPECIALTIES, { each: true })
   specialties?: string[];
 
   @IsArray()

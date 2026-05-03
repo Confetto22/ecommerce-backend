@@ -21,7 +21,7 @@ async function bootstrap() {
   );
 
   app.useGlobalGuards(
-    new JwtAuthGuard(),
+    new JwtAuthGuard(app.get(Reflector)),
     new RolesGuard(app.get(Reflector)),
   );
 
