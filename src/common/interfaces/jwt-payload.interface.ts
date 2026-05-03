@@ -1,9 +1,8 @@
 import type { Role } from 'generated/prisma/enums';
 
 /**
- * Access token payload. Role is embedded so role-based guards can authorize
- * without an extra DB lookup. JwtStrategy still re-fetches the user, so a
- * role change requires a refresh to take effect.
+ * Access token payload. Role is embedded for logging/debugging; JwtStrategy
+ * re-fetches the user so `request.user` reflects the DB (including role changes).
  */
 export interface JwtAccessPayload {
   sub: string;

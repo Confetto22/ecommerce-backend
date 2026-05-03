@@ -14,6 +14,9 @@ import { UpdatePatientDto } from './dto/update-patient.dto';
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 import { CurrentUser } from 'src/common/decorators/current-user.decorator';
 import { User } from '../user/entities/user.entity';
+import { PatientProfile } from './entities/patient-profile.entity';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { Roles } from 'src/common/decorators/roles.decorator';
 
 @Controller('patients')
 export class PatientController {
@@ -37,9 +40,11 @@ export class PatientController {
     return await this.patientService.findAllPatients();
   }
 
-  @Get('/:id')
-  async findPatient(@Param('id') id: string) {
-    return await this.patientService.findPatient(id);
+  @Get('me')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('PATIENT')
+  async getCurrentPatient(@CurrentUser() user: User): Promise<PatientProfile> {
+    return await this.patientService.getCurrentPatient(user.id);
   }
 
   @Patch('/:id')

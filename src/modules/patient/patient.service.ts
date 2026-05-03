@@ -9,6 +9,7 @@ import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { PrismaService } from 'src/infrastructure/database/prisma.service';
 import { User } from '../user/entities/user.entity';
+import { PatientProfile } from './entities/patient-profile.entity';
 
 @Injectable()
 export class PatientService {
@@ -69,8 +70,29 @@ export class PatientService {
     });
   }
 
-  async findPatient(id: string) {
-    await this.verifyPatient(id);
+  async getCurrentPatient(userId: string): Promise<PatientProfile> {
+    const patient = await this.db.patientProfile.findUnique({
+      where: {
+        userId,
+      },
+      include: {
+        user: {
+          omit: {
+            password: true,
+          },
+        },
+      },
+    });
+
+    if (!patient) {
+      throw new NotFoundException('Patient does not exist');
+    }
+
+    const { user, ...profile } = patient;
+    return new PatientProfile({
+      ...profile,
+      user: user ? new User(user) : undefined,
+    });
   }
 
   async updatePatient(id: string, updatePatientDto: UpdatePatientDto) {
