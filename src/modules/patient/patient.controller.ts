@@ -4,10 +4,12 @@ import {
   Post,
   Body,
   Patch,
-  Param,
   Delete,
   UseGuards,
+  Res,
+  Param,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { PatientService } from './patient.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
@@ -17,6 +19,7 @@ import { User } from '../user/entities/user.entity';
 import { PatientProfile } from './entities/patient-profile.entity';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import { Public } from 'src/common/decorators/public.decorator';
 
 @Controller('patients')
 export class PatientController {
@@ -43,20 +46,29 @@ export class PatientController {
   @Get('me')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('PATIENT')
-  async getCurrentPatient(@CurrentUser() user: User): Promise<PatientProfile> {
-    return await this.patientService.getCurrentPatient(user.id);
+  async getSelf(@CurrentUser() user: User): Promise<PatientProfile> {
+    return await this.patientService.getSelf(user.id);
   }
 
-  @Patch('/:id')
-  async updatePatient(
-    @Param('id') id: string,
+  @Get('/:id')
+  async getPublicProfile(@Param('id') id: string): Promise<PatientProfile> {
+    return await this.patientService.getPublicProfile(id);
+  }
+
+  @Patch('me')
+  async updateMyProfile(
+    @CurrentUser() user: User,
+
     @Body() updatePatientDto: UpdatePatientDto,
-  ) {
-    return await this.patientService.updatePatient(id, updatePatientDto);
+  ): Promise<{ message: string }> {
+    return await this.patientService.updateMyProfile(user.id, updatePatientDto);
   }
 
-  @Delete('/:id')
-  async deletePatient(@Param('id') id: string) {
-    await this.patientService.deletePatient(id);
+  @Delete('me')
+  async deletePatient(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ message: string }> {
+    return await this.patientService.deletePatient(user.id, res);
   }
 }

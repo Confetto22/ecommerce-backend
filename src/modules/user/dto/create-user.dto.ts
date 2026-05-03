@@ -30,4 +30,13 @@ export class CreateUserDto {
 
   @IsValidPassword()
   password: string;
+
+  @IsString()
+  phone: string;
+
+  @IsString()
+  timezone: string;
+
+  @IsString()
+  photo: string;
 }

@@ -1,9 +1,13 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -23,11 +27,13 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignupDto } from './dto/signup.dto';
+import { Public } from 'src/common/decorators/public.decorator';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
   @HttpCode(HttpStatus.OK)
@@ -41,6 +47,7 @@ export class AuthController {
    * against unexpected fields and gives Swagger something to document.
    */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Public()
   @Post('login')
   @UseGuards(LocalAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -56,6 +63,8 @@ export class AuthController {
    * Single-device logout. Uses access token to identify the user, then
    * looks at the refresh cookie to know *which* session to terminate.
    */
+
+  @Public()
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -70,6 +79,7 @@ export class AuthController {
   }
 
   /** Logout from every device for the current user. */
+  @Public()
   @Post('logout-all')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -92,6 +102,7 @@ export class AuthController {
     return this.authService.refreshAccessToken(refresher, res);
   }
 
+  @Public()
   @Throttle({ default: { limit: 3, ttl: 3_600_000 } })
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
@@ -105,6 +116,30 @@ export class AuthController {
     return { message };
   }
 
+  /** Verify email using `?token=` from outbound mail (preferred). */
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Get('verify-email')
+  @HttpCode(HttpStatus.OK)
+  async verifyEmailQuery(@Query('token') token?: string) {
+    if (!token?.trim()) {
+      throw new BadRequestException(
+        'Missing verification token. Use the full link from your email.',
+      );
+    }
+    return await this.authService.verifyEmail(token);
+  }
+
+  /** Legacy path-style link `verify-email/:token` (still supported). */
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Get('verify-email/:token')
+  @HttpCode(HttpStatus.OK)
+  async verifyEmailParam(@Param('token') token: string) {
+    return await this.authService.verifyEmail(token.trim());
+  }
+
+  @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)

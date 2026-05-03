@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
@@ -23,9 +19,11 @@ import { PrismaService } from 'src/infrastructure/database/prisma.service';
 
 import { User } from '../user/entities/user.entity';
 import { SignupDto } from './dto/signup.dto';
+import { MailService } from 'src/infrastructure/mail/mail.service';
 
 const BCRYPT_COST = 12;
 const PASSWORD_RESET_TTL_HOURS = 1;
+const EMAIL_VERIFICATION_TTL_HOURS = 24;
 const GENERIC_FORGOT_PASSWORD_MESSAGE =
   'If an account with that email exists, a password reset link has been sent.';
 const GENERIC_SIGNUP_MESSAGE =
@@ -39,6 +37,7 @@ export class AuthService {
     private readonly db: PrismaService,
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
+    private readonly mailService: MailService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -64,7 +63,7 @@ export class AuthService {
 
     const hashedPassword = await hash(registerData.password, BCRYPT_COST);
 
-    await this.db.user.create({
+    const user = await this.db.user.create({
       data: {
         username: registerData.username,
         gender: registerData.gender,
@@ -75,6 +74,23 @@ export class AuthService {
         password: hashedPassword,
       },
     });
+
+    try {
+      const rawToken = await this.issueEmailVerificationToken(user.id);
+      void this.mailService
+        .sendVerificationEmail(user.email, user.username, rawToken)
+        .catch((err) => {
+          this.logger.error(
+            `Verification email failed for user ${user.id}`,
+            err,
+          );
+        });
+    } catch (err) {
+      this.logger.error(
+        `Failed to mint email verification token for user ${user.id}`,
+        err,
+      );
+    }
 
     return { message: GENERIC_SIGNUP_MESSAGE };
   }
@@ -222,6 +238,54 @@ export class AuthService {
     }
 
     return { userId: payload.sub, sessionId: session.id };
+  }
+
+  /**
+   * Verify email address using verification token
+   */
+  async verifyEmail(
+    token: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const trimmed = token.trim();
+    const userId = await this.validateEmailVerificationToken(trimmed);
+
+    // Get user info before update for welcome email
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { email: true, username: true, emailVerified: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const hashed = this.hashToken(trimmed);
+    await this.db.$transaction([
+      this.db.user.update({
+        where: { id: userId },
+        data: { emailVerified: new Date() },
+      }),
+      this.db.token.deleteMany({
+        where: {
+          token: hashed,
+          type: TokenType.EMAIL_VERIFICATION,
+        },
+      }),
+    ]);
+
+    // Send welcome email if this is the first verification (non-blocking)
+    if (!user.emailVerified) {
+      this.mailService
+        .sendWelcomeEmail(user.email, user.username)
+        .catch((error) => {
+          this.logger.warn('Failed to send welcome email:', error);
+        });
+    }
+
+    return {
+      success: true,
+      message: 'Email verified successfully',
+    };
   }
 
   /**
@@ -436,7 +500,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired reset token');
     }
     if (tokenRecord.expires.getTime() <= Date.now()) {
-      await this.db.token.delete({ where: { id: tokenRecord.id } }).catch(() => {});
+      await this.db.token
+        .delete({ where: { id: tokenRecord.id } })
+        .catch(() => {});
       throw new UnauthorizedException('Invalid or expired reset token');
     }
 
@@ -449,5 +515,59 @@ export class AuthService {
 
   private async invalidateAllSessions(userId: string): Promise<void> {
     await this.db.session.deleteMany({ where: { userId } });
+  }
+
+  /**
+   * Validates the *raw* token from the verification link (hashed lookup).
+   */
+  async validateEmailVerificationToken(token: string): Promise<string> {
+    const sanitizedToken = token.trim();
+    const hashedToken = this.hashToken(sanitizedToken);
+
+    const tokenRecord = await this.db.token.findUnique({
+      where: { token: hashedToken },
+      include: { user: true },
+    });
+
+    if (!tokenRecord || tokenRecord.type !== TokenType.EMAIL_VERIFICATION) {
+      throw new UnauthorizedException('Invalid verification token');
+    }
+
+    if (tokenRecord.expires.getTime() <= Date.now()) {
+      await this.db.token
+        .delete({ where: { id: tokenRecord.id } })
+        .catch(() => {});
+      throw new UnauthorizedException('Token has expired');
+    }
+
+    return tokenRecord.userId;
+  }
+
+  /**
+   * Upserts a single email-verification token per user; DB stores hash only.
+   * @returns raw token to put in the outbound email link
+   */
+  private async issueEmailVerificationToken(userId: string): Promise<string> {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = this.hashToken(rawToken);
+    const expires = addHours(new Date(), EMAIL_VERIFICATION_TTL_HOURS);
+
+    await this.db.token.upsert({
+      where: {
+        userId_type: { userId, type: TokenType.EMAIL_VERIFICATION },
+      },
+      create: {
+        token: hashedToken,
+        type: TokenType.EMAIL_VERIFICATION,
+        userId,
+        expires,
+      },
+      update: {
+        token: hashedToken,
+        expires,
+      },
+    });
+
+    return rawToken;
   }
 }

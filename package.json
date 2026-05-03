@@ -38,6 +38,7 @@
     "@nestjs/throttler": "^6.5.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
+    "@sendgrid/mail": "^8.1.6",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.75.2",
     "cache-manager": "^7.2.8",
