@@ -94,7 +94,7 @@ Mediva`,
           </div>
           <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
             <h2 style="color: #333; margin-top: 0;">Welcome, ${fullName}!</h2>
-            <p>Thank you for signing up for Jandas Touch. Please verify your email address by clicking the button below:</p>
+            <p>Thank you for signing up for Mediva. Please verify your email address by clicking the button below:</p>
             <div style="text-align: center; margin: 30px 0;">
               <a href="${verificationUrl}" style="background: #de7b09; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">Verify Email</a>
             </div>
