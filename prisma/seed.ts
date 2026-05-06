@@ -7,6 +7,7 @@ import {
   Role,
   GenderType,
   consultationTypes,
+  AvailabilityKind,
 } from '../generated/prisma/client';
 
 /**
@@ -16,8 +17,9 @@ import {
  *   npx prisma db seed
  *
  * Re-running is safe: every row is upserted by a natural unique key
- * (email for users, userId for patient/doctor profiles). Doctor weekly
- * availability is fully replaced on each run so it stays deterministic.
+ * (email for users, userId for patient/doctor profiles). Doctor
+ * availability (RECURRING + OVERRIDE + BLACKOUT) is fully replaced per
+ * doctor on each run so it stays deterministic.
  *
  * Refuses to run in production unless ALLOW_PROD_SEED=true is set.
  */
@@ -59,6 +61,22 @@ type DoctorSeed = {
       weekday: number;
       start: string;
       end: string;
+      /** Omit or true = rule used by solver; false = soft-disabled (paused). */
+      isActive?: boolean;
+    }>;
+    /** Date-specific windows that replace recurring expansion for that day. */
+    overrides?: Array<{
+      date: string;
+      start: string;
+      end: string;
+      isActive?: boolean;
+    }>;
+    /** Date-specific blocks to subtract (calendar dates, local intent as YYYY-MM-DD). */
+    blackouts?: Array<{
+      date: string;
+      start: string;
+      end: string;
+      isActive?: boolean;
     }>;
   };
 };
@@ -103,11 +121,18 @@ const DOCTORS: DoctorSeed[] = [
       languages: ['en', 'tw'],
       modeOfConsultation: 'BOTH',
       weeklyAvailability: [
-        { weekday: 1, start: '09:00', end: '12:00' },
-        { weekday: 1, start: '14:00', end: '17:00' },
-        { weekday: 3, start: '09:00', end: '12:00' },
-        { weekday: 3, start: '14:00', end: '17:00' },
-        { weekday: 5, start: '09:00', end: '13:00' },
+        { weekday: 1, start: '09:00', end: '12:00', isActive: true },
+        { weekday: 1, start: '14:00', end: '17:00', isActive: true },
+        { weekday: 3, start: '09:00', end: '12:00', isActive: true },
+        // Paused block — solver should ignore; toggling to true restores Wed PM.
+        { weekday: 3, start: '14:00', end: '17:00', isActive: false },
+        { weekday: 5, start: '09:00', end: '13:00', isActive: true },
+      ],
+      overrides: [
+        { date: '2026-06-08', start: '10:00', end: '13:00', isActive: true },
+      ],
+      blackouts: [
+        { date: '2026-12-25', start: '00:00', end: '23:59', isActive: true },
       ],
     },
   },
@@ -136,6 +161,10 @@ const DOCTORS: DoctorSeed[] = [
         { weekday: 4, start: '08:00', end: '13:00' },
         { weekday: 5, start: '08:00', end: '13:00' },
       ],
+      // Inactive — solver should use RECURRING for this Tuesday, not the narrower window.
+      overrides: [
+        { date: '2026-06-02', start: '10:00', end: '12:00', isActive: false },
+      ],
     },
   },
   {
@@ -162,6 +191,10 @@ const DOCTORS: DoctorSeed[] = [
         { weekday: 3, start: '17:00', end: '20:00' },
         { weekday: 4, start: '17:00', end: '20:00' },
         { weekday: 6, start: '10:00', end: '14:00' },
+      ],
+      // Inactive — solver should still emit Saturday slots on this date.
+      blackouts: [
+        { date: '2026-07-04', start: '00:00', end: '23:59', isActive: false },
       ],
     },
   },
@@ -385,18 +418,64 @@ async function main() {
       },
     });
 
-    if (d.doctor.weeklyAvailability?.length) {
+    const hasWeekly = (d.doctor.weeklyAvailability?.length ?? 0) > 0;
+    const hasOverrides = (d.doctor.overrides?.length ?? 0) > 0;
+    const hasBlackouts = (d.doctor.blackouts?.length ?? 0) > 0;
+
+    if (hasWeekly || hasOverrides || hasBlackouts) {
       await db.doctorAvailability.deleteMany({
         where: { doctorId: profile.id },
       });
-      await db.doctorAvailability.createMany({
-        data: d.doctor.weeklyAvailability.map((a) => ({
+
+      const rows: {
+        doctorId: string;
+        kind: AvailabilityKind;
+        weekday: number | null;
+        date: Date | null;
+        startTime: string;
+        endTime: string;
+        isActive: boolean;
+      }[] = [];
+
+      for (const a of d.doctor.weeklyAvailability ?? []) {
+        rows.push({
           doctorId: profile.id,
+          kind: AvailabilityKind.RECURRING,
           weekday: a.weekday,
+          date: null,
           startTime: a.start,
           endTime: a.end,
-        })),
-      });
+          isActive: a.isActive ?? true,
+        });
+      }
+
+      for (const o of d.doctor.overrides ?? []) {
+        rows.push({
+          doctorId: profile.id,
+          kind: AvailabilityKind.OVERRIDE,
+          weekday: null,
+          date: new Date(`${o.date}T00:00:00.000Z`),
+          startTime: o.start,
+          endTime: o.end,
+          isActive: o.isActive ?? true,
+        });
+      }
+
+      for (const b of d.doctor.blackouts ?? []) {
+        rows.push({
+          doctorId: profile.id,
+          kind: AvailabilityKind.BLACKOUT,
+          weekday: null,
+          date: new Date(`${b.date}T00:00:00.000Z`),
+          startTime: b.start,
+          endTime: b.end,
+          isActive: b.isActive ?? true,
+        });
+      }
+
+      if (rows.length) {
+        await db.doctorAvailability.createMany({ data: rows });
+      }
     }
 
     console.log(

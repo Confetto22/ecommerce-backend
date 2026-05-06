@@ -80,6 +80,7 @@ model DoctorProfile {
   specialties            String[]
   languages              String[]
   modeOfConsultation     consultationTypes @default(IN_PERSON)
+  nextAvailableAt        DateTime? // UTC — first bookable slot >= now()
 
   // specialties            String[]
   // totalPatients          Int?
@@ -93,21 +94,23 @@ model DoctorProfile {
   reviews      Review[]
   availability DoctorAvailability[]
 
+  @@index([published, nextAvailableAt]) // NEW — for list sort
   @@index([userId])
-  @@map("doctor_profiles")
 }
 
 model DoctorAvailability {
-  id        String        @id @default(uuid())
+  id        String           @id @default(uuid())
   doctorId  String
-  weekday   Int? // 0..6 for RECURRING
-  date      DateTime? // for OVERRIDE / BLACKOUT
-  startTime String // "HH:mm" in doctor's local timezone
-  endTime   String // "HH:mm"
-  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  kind      AvailabilityKind // ← NEW: the discriminator
+  weekday   Int? // 0–6, only used when kind = RECURRING
+  date      DateTime? // calendar date, only used when kind = OVERRIDE or BLACKOUT
+  startTime String // "HH:mm"   — ignored on BLACKOUT (full-day block)
+  endTime   String // "HH:mm"   — ignored on BLACKOUT (full-day block)
+  isActive  Boolean          @default(true) // ← NEW: soft-disable a rule without deleting it
+  doctor    DoctorProfile    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
 
-  @@index([doctorId, weekday])
-  @@index([doctorId, date])
+  @@index([doctorId, kind, weekday])
+  @@index([doctorId, kind, date])
 }
 
 enum consultationTypes {
@@ -272,4 +275,10 @@ enum AppointmentStatus {
 enum AppointmentType {
   IN_PERSON
   VIRTUAL
+}
+
+enum AvailabilityKind {
+  RECURRING // repeats every week
+  OVERRIDE // replaces the recurring rules for one specific date
+  BLACKOUT // blocks the doctor out for one specific date
 }
