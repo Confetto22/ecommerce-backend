@@ -4,11 +4,7 @@
  */
 
 import { addDays, startOfDay } from 'date-fns';
-import {
-  formatInTimeZone,
-  toDate,
-  toZonedTime,
-} from 'date-fns-tz';
+import { formatInTimeZone, toDate, toZonedTime } from 'date-fns-tz';
 
 export function parseHHmm(s: string): { hours: number; minutes: number } {
   const match = /^(\d{2}):(\d{2})$/.exec(s);
@@ -93,10 +89,9 @@ export function getWeekday(calendarDate: Date, tz: string): number {
 /**
  * Format a UTC instant as an ISO-8601 string with offset in `viewerTz`.
  */
-export function utcInstantToZonedIso(instantUtc: Date, viewerTz: string): string {
-  return formatInTimeZone(
-    instantUtc,
-    viewerTz,
-    "yyyy-MM-dd'T'HH:mm:ss.SSSxxx",
-  );
+export function utcInstantToZonedIso(
+  instantUtc: Date,
+  viewerTz: string,
+): string {
+  return formatInTimeZone(instantUtc, viewerTz, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
 }
