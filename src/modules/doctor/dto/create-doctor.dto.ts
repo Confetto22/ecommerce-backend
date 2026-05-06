@@ -5,9 +5,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
-  IsIn,
   IsInt,
-  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -39,18 +37,20 @@ export class CreateDoctorDto {
   @IsString()
   bio?: string;
 
-  @IsBoolean()
-  published: boolean = false;
-
-  @IsArray()
   @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+
+  @IsOptional()
+  @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(6)
-  // @IsIn(SPECIALTIES, { each: true })
+  @IsString({ each: true })
   specialties?: string[];
 
-  @IsArray()
   @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   languages?: string[];
 
   @IsEnum(consultationTypes)
