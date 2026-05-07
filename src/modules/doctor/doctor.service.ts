@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -12,12 +13,17 @@ import { PrismaService } from 'src/infrastructure/database/prisma.service';
 import { User } from '../user/entities/user.entity';
 import { DoctorProfile } from './entities/doctor-profile.entity';
 import { AuthService } from '../auth/auth.service';
+import { ListDoctorsQueryDto } from './dto/list-doctors-query.dto';
+import { AvailabilityQueryDto } from '../availability/dto/availability-query.dto';
+import { AvailabilityService } from '../availability/availability.service';
+import { SlotResult } from '../availability/types/availability.types';
 
 @Injectable()
 export class DoctorService {
   constructor(
     private readonly db: PrismaService,
     private readonly authService: AuthService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   async createForUser(user: User, dto: CreateDoctorDto) {
@@ -66,17 +72,108 @@ export class DoctorService {
     }
   }
 
-  async findAllDoctors() {
-    return await this.db.doctorProfile.findMany({
-      include: {
-        user: {
-          select: {
-            username: true,
-            email: true,
+  // async findAllDoctors() {
+  //   return await this.db.doctorProfile.findMany({
+  //     include: {
+  //       user: {
+  //         select: {
+  //           username: true,
+  //           email: true,
+  //         },
+  //       },
+  //     },
+  //   });
+  // }
+
+  async listDoctors(query: ListDoctorsQueryDto) {
+    const {
+      city,
+      country,
+      gender,
+      language,
+      limit = 20,
+      mode,
+      page = 1,
+      q,
+      specialty,
+    } = query;
+
+    // ── Build where clause ─────────────────────────────────────
+    // city / country / gender live on User, not DoctorProfile
+    const userIs: Prisma.UserWhereInput = {};
+    if (city) userIs.city = city;
+    if (country) userIs.country = country;
+    if (gender) userIs.gender = gender;
+
+    const and: Prisma.DoctorProfileWhereInput[] = [];
+    if (Object.keys(userIs).length > 0) {
+      and.push({ user: { is: userIs } });
+    }
+    if (q) {
+      and.push({
+        OR: [
+          { bio: { contains: q, mode: 'insensitive' } },
+          {
+            user: {
+              is: { username: { contains: q, mode: 'insensitive' } },
+            },
+          },
+        ],
+      });
+    }
+
+    const where: Prisma.DoctorProfileWhereInput = {
+      published: true,
+      ...(specialty && { specialties: { has: specialty } }),
+      ...(language && { languages: { has: language } }),
+      ...(mode && { modeOfConsultation: mode }),
+      ...(and.length > 0 && { AND: and }),
+    };
+
+    const skip = (page - 1) * limit;
+
+    // ── Query ──────────────────────────────────────────────────
+    const [items, total] = await Promise.all([
+      this.db.doctorProfile.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ nextAvailableAt: 'asc' }, { createdAt: 'desc' }],
+        include: {
+          user: {
+            select: {
+              username: true,
+              email: true,
+              city: true,
+              country: true,
+              gender: true,
+            },
           },
         },
+      }),
+      this.db.doctorProfile.count({ where }),
+    ]);
+
+    // ── Shape response ─────────────────────────────────────────
+
+    return {
+      items: items.map((i) => ({
+        id: i.id,
+        user: i.user,
+        specialties: i.specialties,
+        languages: i.languages,
+        modeOfConsultation: i.modeOfConsultation,
+        perHourRate: i.perHourRate,
+        averageRating: i.averageRating,
+        nextAvailableAt: i.nextAvailableAt,
+      })),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       },
-    });
+    };
   }
 
   async getSelf(userId: string): Promise<DoctorProfile> {
@@ -122,6 +219,37 @@ export class DoctorService {
       ...profile,
       user: user ? new User(user) : undefined,
     });
+  }
+
+  async getAvailabilityForPublic(
+    doctorId: string,
+    query: AvailabilityQueryDto,
+  ): Promise<SlotResult> {
+    const from = new Date(query.from);
+    const to = new Date(query.to);
+
+    // Validate bounds
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+      throw new BadRequestException('Invalid date format');
+    }
+    if (to <= from) {
+      throw new BadRequestException('to must be after from');
+    }
+
+    const maxDays = 90;
+    const diffMs = to.getTime() - from.getTime();
+    if (diffMs > maxDays * 24 * 60 * 60 * 1000) {
+      throw new BadRequestException(`Maximum window is ${maxDays} days`);
+    }
+    // Check doctor exists and is published
+    const doctor = await this.db.doctorProfile.findUnique({
+      where: { id: doctorId },
+      select: { published: true },
+    });
+    if (!doctor || !doctor.published) {
+      throw new NotFoundException('Doctor not found');
+    }
+    return this.availabilityService.getBookableSlots(doctorId, from, to);
   }
 
   async updateMyProfile(

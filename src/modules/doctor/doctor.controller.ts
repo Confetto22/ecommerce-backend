@@ -9,6 +9,7 @@ import {
   Res,
   Param,
   Put,
+  Query,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { DoctorService } from './doctor.service';
@@ -22,6 +23,9 @@ import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { ReplaceAvailabilityDto } from '../availability/dto/replace-availability.dto';
 import { AvailabilityService } from '../availability/availability.service';
+import { Public } from 'src/common/decorators/public.decorator';
+import { ListDoctorsQueryDto } from './dto/list-doctors-query.dto';
+import { AvailabilityQueryDto } from '../availability/dto/availability-query.dto';
 
 @Controller('doctors')
 export class DoctorController {
@@ -41,8 +45,9 @@ export class DoctorController {
   }
 
   @Get()
-  findAllDoctors() {
-    return this.doctorService.findAllDoctors();
+  @Public()
+  async listDoctors(@Query() query: ListDoctorsQueryDto) {
+    return this.doctorService.listDoctors(query);
   }
 
   @Get('me')
@@ -57,12 +62,14 @@ export class DoctorController {
     return await this.doctorService.getPublicProfile(id);
   }
 
-  @Patch('me')
-  async updateMyProfile(
-    @CurrentUser() user: User,
-    @Body() updateDoctorDto: UpdateDoctorDto,
-  ): Promise<{ message: string }> {
-    return await this.doctorService.updateMyProfile(user.id, updateDoctorDto);
+  // 4. GET /doctors/:id/availability — public slot calendar (NEW)
+  @Get(':id/availability')
+  @Public()
+  async getAvailability(
+    @Param('id') doctorId: string,
+    @Query() query: AvailabilityQueryDto,
+  ) {
+    return this.doctorService.getAvailabilityForPublic(doctorId, query);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -73,6 +80,14 @@ export class DoctorController {
     @Body() dto: ReplaceAvailabilityDto,
   ) {
     await this.availabilityService.replaceRules(user, dto);
+  }
+
+  @Patch('me')
+  async updateMyProfile(
+    @CurrentUser() user: User,
+    @Body() updateDoctorDto: UpdateDoctorDto,
+  ): Promise<{ message: string }> {
+    return await this.doctorService.updateMyProfile(user.id, updateDoctorDto);
   }
 
   @Delete('me')
