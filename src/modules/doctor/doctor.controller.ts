@@ -4,10 +4,13 @@ import {
   Post,
   Body,
   Patch,
-  Param,
   Delete,
   UseGuards,
+  Res,
+  Param,
+  Put,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { DoctorService } from './doctor.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
@@ -17,10 +20,15 @@ import { User } from '../user/entities/user.entity';
 import { DoctorProfile } from './entities/doctor-profile.entity';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import { ReplaceAvailabilityDto } from '../availability/dto/replace-availability.dto';
+import { AvailabilityService } from '../availability/availability.service';
 
 @Controller('doctors')
 export class DoctorController {
-  constructor(private readonly doctorService: DoctorService) {}
+  constructor(
+    private readonly doctorService: DoctorService,
+    private readonly availabilityService: AvailabilityService,
+  ) {}
 
   /**
    * Onboard a doctor profile for the authenticated user.
@@ -32,31 +40,46 @@ export class DoctorController {
     return this.doctorService.createForUser(user, createDoctorDto);
   }
 
-  // @Get()
-  // findAll() {
-  //   return this.doctorService.findAll();
-  // }
+  @Get()
+  findAllDoctors() {
+    return this.doctorService.findAllDoctors();
+  }
 
-  // @Get(':id')
-  // findOne(@Param('id') id: string) {
-  //   return this.doctorService.findOne(+id);
-  // }
   @Get('me')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('DOCTOR')
-  async getCurrentDoctorProfile(
-    @CurrentUser() user: User,
-  ): Promise<DoctorProfile> {
-    return await this.doctorService.getCurrentDoctorProfile(user.id);
+  async getSelf(@CurrentUser() user: User): Promise<DoctorProfile> {
+    return await this.doctorService.getSelf(user.id);
   }
 
-  // @Patch(':id')
-  // update(@Param('id') id: string, @Body() updateDoctorDto: UpdateDoctorDto) {
-  //   return this.doctorService.update(+id, updateDoctorDto);
-  // }
+  @Get(':id')
+  async getPublicProfile(@Param('id') id: string): Promise<DoctorProfile> {
+    return await this.doctorService.getPublicProfile(id);
+  }
 
-  // @Delete(':id')
-  // remove(@Param('id') id: string) {
-  //   return this.doctorService.remove(+id);
-  // }
+  @Patch('me')
+  async updateMyProfile(
+    @CurrentUser() user: User,
+    @Body() updateDoctorDto: UpdateDoctorDto,
+  ): Promise<{ message: string }> {
+    return await this.doctorService.updateMyProfile(user.id, updateDoctorDto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('DOCTOR')
+  @Put('me/availability')
+  async replaceAvailability(
+    @CurrentUser() user: User,
+    @Body() dto: ReplaceAvailabilityDto,
+  ) {
+    await this.availabilityService.replaceRules(user, dto);
+  }
+
+  @Delete('me')
+  async deleteDoctor(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ message: string }> {
+    return await this.doctorService.deleteDoctor(user.id, res);
+  }
 }

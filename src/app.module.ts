@@ -12,6 +12,7 @@ import { PatientModule } from './modules/patient/patient.module';
 import { DoctorModule } from './modules/doctor/doctor.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { MailModule } from './infrastructure/mail/mail.module';
+import { AvailabilityModule } from './modules/availability/availability.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -30,6 +31,7 @@ import { MailModule } from './infrastructure/mail/mail.module';
     DoctorModule,
     UploadModule,
     MailModule,
+    AvailabilityModule,
   ],
   controllers: [AppController],
   providers: [
