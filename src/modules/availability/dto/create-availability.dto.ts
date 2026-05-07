@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDate,
@@ -13,6 +14,10 @@ import { AvailabilityKind } from 'generated/prisma/enums';
 export class CreateAvailabilityRuleDto {
   // Each rule:
 
+  @IsOptional()
+  @IsString()
+  doctorId?: string;
+
   @IsString()
   @IsEnum(AvailabilityKind)
   kind: AvailabilityKind; // RECURRING | OVERRIDE | BLACKOUT
@@ -22,9 +27,9 @@ export class CreateAvailabilityRuleDto {
   @Max(6)
   weekday?: number; // 0-6, required if RECURRING
 
-  @IsDate()
   @IsOptional()
-  date?: string; // ISO date, required if OVERRIDE/BLACKOUT
+  @Type(() => Date)
+  date?: Date; // ISO date, required if OVERRIDE/BLACKOUT
 
   @IsString()
   startTime: string; // "HH:mm"

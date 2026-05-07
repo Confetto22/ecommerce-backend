@@ -8,6 +8,7 @@ import {
   UseGuards,
   Res,
   Param,
+  Put,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { DoctorService } from './doctor.service';
@@ -19,10 +20,15 @@ import { User } from '../user/entities/user.entity';
 import { DoctorProfile } from './entities/doctor-profile.entity';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { Roles } from 'src/common/decorators/roles.decorator';
+import { ReplaceAvailabilityDto } from '../availability/dto/replace-availability.dto';
+import { AvailabilityService } from '../availability/availability.service';
 
 @Controller('doctors')
 export class DoctorController {
-  constructor(private readonly doctorService: DoctorService) {}
+  constructor(
+    private readonly doctorService: DoctorService,
+    private readonly availabilityService: AvailabilityService,
+  ) {}
 
   /**
    * Onboard a doctor profile for the authenticated user.
@@ -30,10 +36,7 @@ export class DoctorController {
    */
   @Post()
   @UseGuards(JwtAuthGuard)
-  create(
-    @CurrentUser() user: User,
-    @Body() createDoctorDto: CreateDoctorDto,
-  ) {
+  create(@CurrentUser() user: User, @Body() createDoctorDto: CreateDoctorDto) {
     return this.doctorService.createForUser(user, createDoctorDto);
   }
 
@@ -60,6 +63,16 @@ export class DoctorController {
     @Body() updateDoctorDto: UpdateDoctorDto,
   ): Promise<{ message: string }> {
     return await this.doctorService.updateMyProfile(user.id, updateDoctorDto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('DOCTOR')
+  @Put('me/availability')
+  async replaceAvailability(
+    @CurrentUser() user: User,
+    @Body() dto: ReplaceAvailabilityDto,
+  ) {
+    await this.availabilityService.replaceRules(user, dto);
   }
 
   @Delete('me')
