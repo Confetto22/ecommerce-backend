@@ -9,10 +9,18 @@ import {
 } from './helpers/time.helpers';
 import { Interval, EnrichedSlot, SlotResult } from './types/availability.types';
 import { snapToSlotGrid, subtractIntervals } from './helpers/interval.helpers';
+import { User } from '../user/entities/user.entity';
+import { ReplaceAvailabilityDto } from './dto/replace-availability.dto';
+import { Prisma } from 'generated/prisma/client';
+import { CreateAvailabilityRuleDto } from './dto/create-availability.dto';
+import { addDays } from 'date-fns';
 
 @Injectable()
 export class AvailabilityService {
-  constructor(private readonly db: PrismaService) {}
+  constructor(
+    private readonly db: PrismaService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async getBookableSlots(
     doctorId: string,
@@ -144,5 +152,59 @@ export class AvailabilityService {
       slotMinutes,
       slots,
     };
+  }
+
+  async replaceRules(user: User, replaceAvailability: ReplaceAvailabilityDto) {
+    await this.prisma.$transaction(async (tx) => {
+      // Verify user has a DoctorProfile
+      const doctor = await tx.doctorProfile.findUnique({
+        where: { userId: user?.id },
+        // include: {
+        //   availability: {
+        //     select: {
+        //       date: true,
+        //       startTime: true,
+        //       endTime: true,
+        //       kind: true,
+        //       weekday: true,
+
+        //   }}
+        // }
+      });
+      if (!doctor) {
+        throw new NotFoundException('Docotor not found');
+      }
+
+      // deleteMany({ where: { doctorId } })
+      await tx.doctorAvailability.deleteMany({
+        where: {
+          doctorId: doctor.id,
+        },
+      });
+
+      // createMany({ data: rules })
+      await tx.doctorAvailability.createMany({
+        data: replaceAvailability.rules.map((rule) => ({
+          ...rule,
+          doctorId: doctor.id,
+        })),
+      });
+
+      // Call recomputeNextAvailable(doctorId) (Phase G)
+      this.recomputeNextAvailable(doctor.id);
+    });
+  }
+
+  async recomputeNextAvailable(doctorId: string): Promise<void> {
+    const now = new Date();
+    const horizon = addDays(now, 14); // configurable
+
+    const result = await this.getBookableSlots(doctorId, now, horizon);
+    const firstSlot = result.slots[0] ?? null;
+
+    await this.db.doctorProfile.update({
+      where: { id: doctorId },
+      data: { nextAvailableAt: firstSlot?.startAt ?? null },
+    });
   }
 }
