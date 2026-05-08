@@ -1,4 +1,9 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
@@ -23,7 +28,8 @@ import { MailService } from 'src/infrastructure/mail/mail.service';
 
 const BCRYPT_COST = 12;
 const PASSWORD_RESET_TTL_HOURS = 1;
-const EMAIL_VERIFICATION_TTL_HOURS = 24;
+const EMAIL_VERIFICATION_TTL_HOURS = 1;
+const VERIFICATION_CODE_LENGTH = 6;
 const GENERIC_FORGOT_PASSWORD_MESSAGE =
   'If an account with that email exists, a password reset link has been sent.';
 const GENERIC_SIGNUP_MESSAGE =
@@ -76,9 +82,9 @@ export class AuthService {
     });
 
     try {
-      const rawToken = await this.issueEmailVerificationToken(user.id);
+      const code = await this.issueVerificationCode(user.id);
       void this.mailService
-        .sendVerificationEmail(user.email, user.username, rawToken)
+        .sendVerificationCode(user.email, user.username, code)
         .catch((err) => {
           this.logger.error(
             `Verification email failed for user ${user.id}`,
@@ -244,47 +250,75 @@ export class AuthService {
    * Verify email address using verification token
    */
   async verifyEmail(
-    token: string,
-  ): Promise<{ success: boolean; message: string }> {
-    const trimmed = token.trim();
-    const userId = await this.validateEmailVerificationToken(trimmed);
+    email: string,
+    code: string,
+  ): Promise<{ success: boolean; message: string; user: User }> {
+    // const trimmedCode = code.trim();
+    // const validatedUserId = await this.validateVerificationCode(
+    //   email,
+    //   trimmedCode,
+    // );
 
-    // Get user info before update for welcome email
     const user = await this.db.user.findUnique({
-      where: { id: userId },
-      select: { email: true, username: true, emailVerified: true },
+      where: { email },
+      select: { id: true, email: true, username: true, emailVerified: true },
     });
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      // Don't reveal whether the email exists
+      throw new UnauthorizedException('Invalid verification code');
     }
 
-    const hashed = this.hashToken(trimmed);
-    await this.db.$transaction([
-      this.db.user.update({
-        where: { id: userId },
+    if (user.emailVerified) {
+      const fullUser = await this.db.user.findUnique({
+        where: { id: user.id },
+      });
+      if (!fullUser) {
+        throw new UnauthorizedException('Invalid verification code');
+      }
+
+      return {
+        success: true,
+        message: 'Email is already verified',
+        user: new User(fullUser),
+      };
+    }
+
+    await this.validateVerificationCode(user.id, code.trim());
+
+    const fullUser = await this.db.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
         data: { emailVerified: new Date() },
-      }),
-      this.db.token.deleteMany({
+      });
+
+      await tx.token.deleteMany({
         where: {
-          token: hashed,
+          userId: user.id,
           type: TokenType.EMAIL_VERIFICATION,
         },
-      }),
-    ]);
+      });
 
-    // Send welcome email if this is the first verification (non-blocking)
-    if (!user.emailVerified) {
-      this.mailService
-        .sendWelcomeEmail(user.email, user.username)
-        .catch((error) => {
-          this.logger.warn('Failed to send welcome email:', error);
-        });
+      return tx.user.findUnique({
+        where: { id: user.id },
+      });
+    });
+
+    if (!fullUser) {
+      throw new UnauthorizedException('Invalid verification code');
     }
+
+    // Welcome email (non-blocking)
+    this.mailService
+      .sendWelcomeEmail(user.email, user.username)
+      .catch((error) => {
+        this.logger.warn('Failed to send welcome email:', error);
+      });
 
     return {
       success: true,
       message: 'Email verified successfully',
+      user: new User(fullUser),
     };
   }
 
@@ -518,38 +552,59 @@ export class AuthService {
   }
 
   /**
-   * Validates the *raw* token from the verification link (hashed lookup).
+   * Validates a 6-digit verification code for a specific user.
+   * Looks up by userId + type, then compares the code using timing-safe comparison.
    */
-  async validateEmailVerificationToken(token: string): Promise<string> {
-    const sanitizedToken = token.trim();
-    const hashedToken = this.hashToken(sanitizedToken);
-
+  async validateVerificationCode(
+    userId: string,
+    code: string,
+  ): Promise<string> {
     const tokenRecord = await this.db.token.findUnique({
-      where: { token: hashedToken },
-      include: { user: true },
+      where: {
+        userId_type: { userId, type: TokenType.EMAIL_VERIFICATION },
+      },
     });
 
-    if (!tokenRecord || tokenRecord.type !== TokenType.EMAIL_VERIFICATION) {
-      throw new UnauthorizedException('Invalid verification token');
+    if (!tokenRecord) {
+      throw new NotFoundException('Invalid or expired verification code');
     }
 
     if (tokenRecord.expires.getTime() <= Date.now()) {
       await this.db.token
         .delete({ where: { id: tokenRecord.id } })
         .catch(() => {});
-      throw new UnauthorizedException('Token has expired');
+      throw new UnauthorizedException(
+        'Verification code has expired. Please request a new one.',
+      );
+    }
+
+    // Timing-safe comparison to prevent timing attacks
+
+    const storedBuffer = Buffer.from(tokenRecord.token);
+    const inputBuffer = Buffer.from(
+      code.padStart(VERIFICATION_CODE_LENGTH, '0'),
+    );
+    if (
+      storedBuffer.length !== inputBuffer.length ||
+      !crypto.timingSafeEqual(storedBuffer, inputBuffer)
+    ) {
+      throw new UnauthorizedException('Invalid verification code');
     }
 
     return tokenRecord.userId;
   }
 
   /**
-   * Upserts a single email-verification token per user; DB stores hash only.
-   * @returns raw token to put in the outbound email link
+   * Upserts a single email-verification code per user.
+   * Stored in plain text — brute-force is mitigated by rate limiting + 1h TTL.
+   * @returns 6-digit code to embed in the outbound email
    */
-  private async issueEmailVerificationToken(userId: string): Promise<string> {
-    const rawToken = crypto.randomBytes(32).toString('hex');
-    const hashedToken = this.hashToken(rawToken);
+  private async issueVerificationCode(userId: string): Promise<string> {
+    // crypto.randomInt is CSPRNG-backed, uniform distribution over [0, 1_000_000)
+    const code = crypto
+      .randomInt(0, 1_000_000)
+      .toString()
+      .padStart(VERIFICATION_CODE_LENGTH, '0');
     const expires = addHours(new Date(), EMAIL_VERIFICATION_TTL_HOURS);
 
     await this.db.token.upsert({
@@ -557,17 +612,51 @@ export class AuthService {
         userId_type: { userId, type: TokenType.EMAIL_VERIFICATION },
       },
       create: {
-        token: hashedToken,
+        token: code,
         type: TokenType.EMAIL_VERIFICATION,
         userId,
         expires,
       },
+
       update: {
-        token: hashedToken,
+        token: code,
         expires,
       },
     });
 
-    return rawToken;
+    return code;
+  }
+
+  async resendVerificationCode(email: string): Promise<{ message: string }> {
+    const user = await this.db.user.findUnique({
+      where: {
+        email,
+      },
+      select: { id: true, email: true, username: true, emailVerified: true },
+    });
+
+    // Don't reveal whether the user exists
+    if (!user || user.emailVerified) {
+      return {
+        message:
+          'If your email is registered and unverified, a new code has been sent.',
+      };
+    }
+
+    const code = await this.issueVerificationCode(user.id);
+
+    void this.mailService
+      .sendVerificationCode(user.email, user.username, code)
+      .catch((err) => {
+        this.logger.error(
+          `Resend verification code failed for user ${user.id}`,
+          err,
+        );
+      });
+
+    return {
+      message:
+        'If your email is registered and unverified, a new code has been sent.',
+    };
   }
 }

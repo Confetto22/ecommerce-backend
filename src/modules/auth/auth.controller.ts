@@ -1,13 +1,9 @@
 import {
-  BadRequestException,
   Body,
   Controller,
-  Get,
   HttpCode,
   HttpStatus,
-  Param,
   Post,
-  Query,
   Req,
   Res,
   UseGuards,
@@ -28,6 +24,8 @@ import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignupDto } from './dto/signup.dto';
 import { Public } from 'src/common/decorators/public.decorator';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -110,33 +108,33 @@ export class AuthController {
     const { message } = await this.authService.forgotPassword(
       forgotPasswordDto.email,
     );
-    // `rawToken` is intentionally not surfaced to the client; the service
-    // returns it so an email module can pick it up. Until email is wired,
-    // wire your email sender to call `forgotPassword` directly.
+
     return { message };
   }
 
-  /** Verify email using `?token=` from outbound mail (preferred). */
   @Public()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @Get('verify-email')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('verify-email')
   @HttpCode(HttpStatus.OK)
-  async verifyEmailQuery(@Query('token') token?: string) {
-    if (!token?.trim()) {
-      throw new BadRequestException(
-        'Missing verification token. Use the full link from your email.',
-      );
-    }
-    return await this.authService.verifyEmail(token);
+  async verifyEmail(
+    @Body() dto: VerifyEmailDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.verifyEmail(dto.email, dto.code);
+    // Auto-login after successful verification
+    const loginResult = await this.authService.login(result.user, res);
+    return {
+      ...result,
+      ...loginResult,
+    };
   }
 
-  /** Legacy path-style link `verify-email/:token` (still supported). */
   @Public()
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @Get('verify-email/:token')
+  @Throttle({ default: { limit: 3, ttl: 3_600_000 } }) // 3 per hour
+  @Post('resend-verification')
   @HttpCode(HttpStatus.OK)
-  async verifyEmailParam(@Param('token') token: string) {
-    return await this.authService.verifyEmail(token.trim());
+  async resendVerification(@Body() dto: ResendVerificationDto) {
+    return this.authService.resendVerificationCode(dto.email);
   }
 
   @Public()
