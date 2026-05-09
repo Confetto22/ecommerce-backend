@@ -120,33 +120,46 @@ enum consultationTypes {
 }
 
 model Appointment {
-  id                   String              @id @default(uuid())
-  appointmentSessionId String?             @unique
+  id                   String            @id @default(uuid())
+  appointmentSessionId String?           @unique
   context              String
   scheduledStartAt     DateTime
   scheduledEndAt       DateTime
   conditionTitle       String
   images               String[]
   patientId            String
-  idempotencyKey       String?             @unique
+  idempotencyKey       String?           @unique
   // Money in pesewas
   priceAtBookingMinor  Int
   doctorId             String
-  status               AppointmentStatus   @default(PENDING)
-  type                 AppointmentType     @default(IN_PERSON)
-  createdAt            DateTime            @default(now())
-  updatedAt            DateTime            @updatedAt
-  appointmentLogs      AppointmentLog[]
-  payment              Payment?
-  appointmentSession   AppointmentSession? @relation(fields: [appointmentSessionId], references: [id])
-  doctor               DoctorProfile       @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-  patient              PatientProfile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
-  reviews              Review[]
+  status               AppointmentStatus @default(PENDING)
+  type                 AppointmentType   @default(IN_PERSON)
+
+  // ── 2. NEW: structured cancellation / rejection reason. ──
+  reason      String? // free text; displayed back to patient
+  cancelledBy String? // userId of the actor who cancelled
+
+  // ── 3. NEW: reschedule proposal — the doctor's suggested new slot. ──
+  proposedStartAt DateTime?
+  proposedEndAt   DateTime?
+  proposedAt      DateTime?
+  proposalRound   Int       @default(0) // capped at 2 (one round each side)
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  appointmentLogs    AppointmentLog[]
+  payment            Payment?
+  appointmentSession AppointmentSession? @relation(fields: [appointmentSessionId], references: [id])
+  doctor             DoctorProfile       @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patient            PatientProfile      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  reviews            Review[]
 
   @@unique([doctorId, scheduledStartAt])
   @@index([status])
   @@index([doctorId, scheduledStartAt])
   @@index([patientId, scheduledStartAt])
+  @@index([doctorId, status])
+  @@index([patientId, status])
 }
 
 model Review {
@@ -169,11 +182,17 @@ model AppointmentLog {
   previousStatus AppointmentStatus
   newStatus      AppointmentStatus
   changedBy      String
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+
+  reason   String?
+  metadata Json?
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
   // RELATIONS
-  appointment    Appointment       @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
-  changedByUser  User              @relation(fields: [changedBy], references: [id], onDelete: Cascade)
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  changedByUser User        @relation(fields: [changedBy], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId, createdAt])
 }
 
 model AppointmentSession {
@@ -267,6 +286,7 @@ enum AppointmentStatus {
   PENDING
   RESCHEDULED
   APPROVED
+  IN_SESSION
   CANCELLED
   COMPLETED
   NO_SHOW
