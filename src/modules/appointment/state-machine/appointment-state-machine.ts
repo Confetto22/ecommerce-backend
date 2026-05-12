@@ -1,6 +1,6 @@
 import { AppointmentStatus, Role, Prisma } from 'generated/prisma/client';
 import { findTransition, TransitionActor } from './transitions';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 
 export interface TransitionInput {
   appointmentId: string;
@@ -12,6 +12,7 @@ export interface TransitionInput {
   metadata?: Record<string, unknown>;
 }
 
+@Injectable()
 export class AppointmentStateMachine {
   /**
    * Validates the transition then writes the AppointmentLog. Must be called
