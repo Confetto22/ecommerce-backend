@@ -13,6 +13,9 @@ import { DoctorModule } from './modules/doctor/doctor.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { MailModule } from './infrastructure/mail/mail.module';
 import { AvailabilityModule } from './modules/availability/availability.module';
+import { AppointmentModule } from './modules/appointment/appointment.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -24,6 +27,7 @@ import { AvailabilityModule } from './modules/availability/availability.module';
         },
       ],
     }),
+    EventEmitterModule.forRoot({ wildcard: false, maxListeners: 10 }),
     PrismaModule,
     AuthModule,
     UserModule,
@@ -32,6 +36,7 @@ import { AvailabilityModule } from './modules/availability/availability.module';
     UploadModule,
     MailModule,
     AvailabilityModule,
+    AppointmentModule,
   ],
   controllers: [AppController],
   providers: [
