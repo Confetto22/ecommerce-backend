@@ -1,0 +1,149 @@
+### ─── M4 Booking Core — Manual QA ──────────────────────────────────────
+### Run these in order to exercise the full appointment lifecycle.
+### Adjust the variable values below after seeding / logging in.
+
+@base = http://localhost:3000
+
+# After login as patient:
+@patient_access = YOUR_PATIENT_ACCESS_TOKEN
+@patient_refresh = YOUR_PATIENT_REFRESH_TOKEN
+
+# After login as doctor:
+@doctor_access = YOUR_DOCTOR_ACCESS_TOKEN
+@doctor_refresh = YOUR_DOCTOR_REFRESH_TOKEN
+
+# After creating a booking:
+@apptId = PASTE_APPOINTMENT_ID_HERE
+@doctorId = PASTE_DOCTOR_PROFILE_ID_HERE
+
+### ─────────────────────────────────────────────────────────────────────
+### 1. Patient creates a booking
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+Idempotency-Key: 11111111-1111-1111-1111-111111111111
+
+{
+  "doctorId": "{{doctorId}}",
+  "scheduledStartAt": "2026-06-08T10:00:00Z",
+  "scheduledEndAt":   "2026-06-08T11:00:00Z",
+  "conditionTitle":   "Persistent migraine",
+  "context":          "Daily headache for the past two weeks, worsening at night.",
+  "images":           [],
+  "type":             "VIRTUAL"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 2. Idempotent replay (same key → same appointment)
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+Idempotency-Key: 11111111-1111-1111-1111-111111111111
+
+{
+  "doctorId": "{{doctorId}}",
+  "scheduledStartAt": "2026-06-08T10:00:00Z",
+  "scheduledEndAt":   "2026-06-08T11:00:00Z",
+  "conditionTitle":   "Persistent migraine",
+  "context":          "Daily headache for the past two weeks, worsening at night.",
+  "type":             "VIRTUAL"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 3. Doctor approves
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/approve
+Cookie: access_token={{doctor_access}}; refresh_token={{doctor_refresh}}
+
+### ─────────────────────────────────────────────────────────────────────
+### 4. Doctor rejects (use a fresh booking for this)
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/reject
+Cookie: access_token={{doctor_access}}; refresh_token={{doctor_refresh}}
+Content-Type: application/json
+
+{
+  "reason": "Slot conflict — I have a surgery at this time"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 5. Doctor proposes a new time (reschedule)
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/reschedule
+Cookie: access_token={{doctor_access}}; refresh_token={{doctor_refresh}}
+Content-Type: application/json
+
+{
+  "proposedStartAt": "2026-06-09T15:00:00Z",
+  "proposedEndAt":   "2026-06-09T16:00:00Z"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 6. Patient counters the proposal
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/respond-to-reschedule
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+
+{
+  "action": "COUNTER",
+  "proposedStartAt": "2026-06-10T10:00:00Z",
+  "proposedEndAt":   "2026-06-10T11:00:00Z"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 7. Patient accepts the proposal
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/respond-to-reschedule
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+
+{
+  "action": "ACCEPT"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 8. Patient cancels
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments/{{apptId}}/cancel
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+
+{
+  "reason": "Resolved on its own"
+}
+
+### ─────────────────────────────────────────────────────────────────────
+### 9. Doctor inbox (pending only)
+### ─────────────────────────────────────────────────────────────────────
+GET {{base}}/appointments/inbox?status=PENDING&page=1&limit=20
+Cookie: access_token={{doctor_access}}; refresh_token={{doctor_refresh}}
+
+### ─────────────────────────────────────────────────────────────────────
+### 10. Patient list (next 30 days)
+### ─────────────────────────────────────────────────────────────────────
+GET {{base}}/appointments/me?fromDate=2026-06-08T00:00:00Z&toDate=2026-07-08T00:00:00Z
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+
+### ─────────────────────────────────────────────────────────────────────
+### 11. Appointment detail with timeline
+### ─────────────────────────────────────────────────────────────────────
+GET {{base}}/appointments/{{apptId}}
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+
+### ─────────────────────────────────────────────────────────────────────
+### 12. Missing idempotency key → 400
+### ─────────────────────────────────────────────────────────────────────
+POST {{base}}/appointments
+Cookie: access_token={{patient_access}}; refresh_token={{patient_refresh}}
+Content-Type: application/json
+
+{
+  "doctorId": "{{doctorId}}",
+  "scheduledStartAt": "2026-06-08T10:00:00Z",
+  "scheduledEndAt":   "2026-06-08T11:00:00Z",
+  "conditionTitle":   "Test",
+  "context":          "Should fail with MISSING_IDEMPOTENCY_KEY"
+}

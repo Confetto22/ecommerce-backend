@@ -195,6 +195,17 @@ export class AvailabilityService {
     });
   }
 
+  /**
+   * Invalidates any cached availability data for the given doctor.
+   * Currently a no-op — no Redis cache layer yet. When one is added,
+   * this will clear cached slot results so the next query sees fresh data.
+   */
+  async invalidateCache(doctorId: string): Promise<void> {
+    // TODO: When a cache layer (Redis/CacheManager) is added, evict
+    // keys like `availability:${doctorId}:*` here.
+    return;
+  }
+
   async recomputeNextAvailable(doctorId: string): Promise<void> {
     const now = new Date();
     const horizon = addDays(now, 14); // configurable

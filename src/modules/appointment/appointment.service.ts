@@ -2,15 +2,25 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Appointment, AppointmentStatus, Prisma } from 'generated/prisma/client';
+import {
+  Appointment,
+  AppointmentStatus,
+  Prisma,
+} from 'generated/prisma/client';
 import { User } from '../user/entities/user.entity';
 import { PrismaService } from 'src/infrastructure/database/prisma.service';
 import { AppointmentStateMachine } from './state-machine/appointment-state-machine';
 import { AvailabilityService } from '../availability/availability.service';
-import { AppointmentResponseDto } from './dto/appointment-response.dto';
+import {
+  AppointmentResponseDto,
+  AppointmentDetailResponseDto,
+  AppointmentWithRelations,
+  PageMeta,
+} from './dto/appointment-response.dto';
 import { RejectAppointmentDto } from './dto/reject-appointment.dto';
 import { CancelAppointmentDto } from './dto/cancel-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
@@ -18,6 +28,7 @@ import {
   RespondToRescheduleDto,
   RescheduleAction,
 } from './dto/respond-to-reschedule.dto';
+import { ListAppointmentsQueryDto } from './dto/list-appointments-query.dto';
 import {
   APPOINTMENT_APPROVED,
   APPOINTMENT_CANCELLED,
@@ -25,8 +36,24 @@ import {
   APPOINTMENT_RESCHEDULED,
 } from './events/appointment.events';
 
+// ── Prisma include fragments for doctor/patient relations ─────────────────
+const APPOINTMENT_INCLUDE = {
+  doctor: { include: { user: { select: { username: true, photo: true, timezone: true } } } },
+  patient: { include: { user: { select: { username: true } } } },
+} satisfies Prisma.AppointmentInclude;
+
+const APPOINTMENT_DETAIL_INCLUDE = {
+  ...APPOINTMENT_INCLUDE,
+  appointmentLogs: {
+    orderBy: { createdAt: 'asc' as const },
+    include: { changedByUser: { select: { id: true, username: true } } },
+  },
+} satisfies Prisma.AppointmentInclude;
+
 @Injectable()
 export class AppointmentService {
+  private readonly logger = new Logger(AppointmentService.name);
+
   constructor(
     private readonly db: PrismaService,
     private readonly stateMachine: AppointmentStateMachine,
@@ -35,9 +62,107 @@ export class AppointmentService {
   ) {}
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Read endpoints (Phase E)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /appointments/me — patient's own appointment list.
+   * Filterable by status, date range. Paginated.
+   */
+  async listForPatient(
+    user: User,
+    query: ListAppointmentsQueryDto,
+  ): Promise<{ items: AppointmentResponseDto[]; meta: PageMeta }> {
+    const profile = await this.db.patientProfile.findUnique({
+      where: { userId: user.id },
+    });
+    if (!profile) return this.emptyPage(query);
+
+    const where = this.buildWhereClause({ patientId: profile.id }, query);
+
+    const [items, total] = await Promise.all([
+      this.db.appointment.findMany({
+        where,
+        orderBy: [{ scheduledStartAt: 'asc' }],
+        skip: ((query.page ?? 1) - 1) * (query.limit ?? 20),
+        take: query.limit ?? 20,
+        include: APPOINTMENT_INCLUDE,
+      }),
+      this.db.appointment.count({ where }),
+    ]);
+
+    return {
+      items: items.map((a) =>
+        AppointmentResponseDto.fromWithRelations(a as unknown as AppointmentWithRelations),
+      ),
+      meta: this.toMeta(query, total),
+    };
+  }
+
+  /**
+   * GET /appointments/inbox — doctor's inbox.
+   * Pending first (via enum ordering), then by scheduledStartAt.
+   */
+  async listForDoctor(
+    user: User,
+    query: ListAppointmentsQueryDto,
+  ): Promise<{ items: AppointmentResponseDto[]; meta: PageMeta }> {
+    const doctor = await this.db.doctorProfile.findUnique({
+      where: { userId: user.id },
+    });
+    if (!doctor) return this.emptyPage(query);
+
+    const where = this.buildWhereClause({ doctorId: doctor.id }, query);
+
+    const [items, total] = await Promise.all([
+      this.db.appointment.findMany({
+        where,
+        orderBy: [
+          // Pending first when no status filter ("triage" view)
+          { status: 'asc' },
+          { scheduledStartAt: 'asc' },
+        ],
+        skip: ((query.page ?? 1) - 1) * (query.limit ?? 20),
+        take: query.limit ?? 20,
+        include: APPOINTMENT_INCLUDE,
+      }),
+      this.db.appointment.count({ where }),
+    ]);
+
+    return {
+      items: items.map((a) =>
+        AppointmentResponseDto.fromWithRelations(a as unknown as AppointmentWithRelations),
+      ),
+      meta: this.toMeta(query, total),
+    };
+  }
+
+  /**
+   * GET /appointments/:id — single appointment detail with log timeline.
+   * Both participants can view.
+   */
+  async findById(
+    user: User,
+    id: string,
+  ): Promise<AppointmentDetailResponseDto> {
+    const appt = await this.db.appointment.findUnique({
+      where: { id },
+      include: APPOINTMENT_DETAIL_INCLUDE,
+    });
+    if (!appt) {
+      throw new NotFoundException({ error: 'APPOINTMENT_NOT_FOUND' });
+    }
+
+    // Verify caller is a participant (using the included relation data)
+    await this.assertParticipantFromRelations(appt as any, user);
+
+    return AppointmentDetailResponseDto.fromDetail(appt as any);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Lifecycle methods — each follows the canonical pattern from §3.3:
   //   1. tx: read → validate ownership → assertAndLog → guardedUpdate
-  //   2. post-commit: emit event, recompute availability
+  //   2. post-commit: emit event, invalidate + recompute availability
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
@@ -64,8 +189,11 @@ export class AppointmentService {
       });
     });
 
-    this.events.emit(APPOINTMENT_APPROVED, { appointmentId: updated.id });
-    void this.availability.recomputeNextAvailable(updated.doctorId);
+    this.events.emit(APPOINTMENT_APPROVED, {
+      appointmentId: updated.id,
+      doctorId: updated.doctorId,
+    });
+    void this.invalidateAndRecompute(updated.doctorId);
     return AppointmentResponseDto.from(updated);
   }
 
@@ -97,8 +225,12 @@ export class AppointmentService {
       });
     });
 
-    this.events.emit(APPOINTMENT_REJECTED, { appointmentId: updated.id });
-    void this.availability.recomputeNextAvailable(updated.doctorId);
+    this.events.emit(APPOINTMENT_REJECTED, {
+      appointmentId: updated.id,
+      doctorId: updated.doctorId,
+      reason: dto.reason,
+    });
+    void this.invalidateAndRecompute(updated.doctorId);
     return AppointmentResponseDto.from(updated);
   }
 
@@ -130,8 +262,12 @@ export class AppointmentService {
       });
     });
 
-    this.events.emit(APPOINTMENT_CANCELLED, { appointmentId: updated.id });
-    void this.availability.recomputeNextAvailable(updated.doctorId);
+    this.events.emit(APPOINTMENT_CANCELLED, {
+      appointmentId: updated.id,
+      doctorId: updated.doctorId,
+      cancelledBy: user.id,
+    });
+    void this.invalidateAndRecompute(updated.doctorId);
     return AppointmentResponseDto.from(updated);
   }
 
@@ -171,8 +307,11 @@ export class AppointmentService {
       });
     });
 
-    this.events.emit(APPOINTMENT_RESCHEDULED, { appointmentId: updated.id });
-    void this.availability.recomputeNextAvailable(updated.doctorId);
+    this.events.emit(APPOINTMENT_RESCHEDULED, {
+      appointmentId: updated.id,
+      doctorId: updated.doctorId,
+    });
+    void this.invalidateAndRecompute(updated.doctorId);
     return AppointmentResponseDto.from(updated);
   }
 
@@ -203,14 +342,24 @@ export class AppointmentService {
 
     // Emit the appropriate event based on final status
     if (updated.status === 'APPROVED') {
-      this.events.emit(APPOINTMENT_APPROVED, { appointmentId: updated.id });
+      this.events.emit(APPOINTMENT_APPROVED, {
+        appointmentId: updated.id,
+        doctorId: updated.doctorId,
+      });
     } else if (updated.status === 'RESCHEDULED') {
-      this.events.emit(APPOINTMENT_RESCHEDULED, { appointmentId: updated.id });
+      this.events.emit(APPOINTMENT_RESCHEDULED, {
+        appointmentId: updated.id,
+        doctorId: updated.doctorId,
+      });
     } else if (updated.status === 'CANCELLED') {
-      this.events.emit(APPOINTMENT_CANCELLED, { appointmentId: updated.id });
+      this.events.emit(APPOINTMENT_CANCELLED, {
+        appointmentId: updated.id,
+        doctorId: updated.doctorId,
+        cancelledBy: patientUser.id,
+      });
     }
 
-    void this.availability.recomputeNextAvailable(updated.doctorId);
+    void this.invalidateAndRecompute(updated.doctorId);
     return AppointmentResponseDto.from(updated);
   }
 
@@ -422,5 +571,83 @@ export class AppointmentService {
       return this.assertDoctorOwns(tx, appt, user);
     }
     return this.assertPatientOwns(tx, appt, user);
+  }
+
+  /**
+   * Assert participant using already-included relation data.
+   * Used by the detail endpoint (findById) where doctor/patient are already loaded.
+   */
+  private async assertParticipantFromRelations(
+    appt: AppointmentWithRelations,
+    user: User,
+  ): Promise<void> {
+    const isDoctor = appt.doctor?.userId === user.id;
+    const isPatient = appt.patient?.userId === user.id;
+    if (!isDoctor && !isPatient) {
+      throw new ForbiddenException({
+        message: 'You are not a participant in this appointment.',
+        error: 'NOT_APPOINTMENT_PARTICIPANT',
+      });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Cache & availability hooks (§15 of 05d)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Post-commit hook: invalidate cache + recompute nextAvailableAt.
+   * Uses allSettled so a Redis outage doesn't block the appointment response.
+   */
+  private async invalidateAndRecompute(doctorId: string): Promise<void> {
+    await Promise.allSettled([
+      this.availability.invalidateCache(doctorId),
+      this.availability.recomputeNextAvailable(doctorId),
+    ]).catch((err) =>
+      this.logger.warn('invalidateAndRecompute failed', err),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Pagination helpers
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Build the Prisma WHERE clause from common filters.
+   */
+  private buildWhereClause(
+    base: Prisma.AppointmentWhereInput,
+    query: ListAppointmentsQueryDto,
+  ): Prisma.AppointmentWhereInput {
+    const where: Prisma.AppointmentWhereInput = { ...base };
+    if (query.status) where.status = query.status;
+    if (query.fromDate || query.toDate) {
+      where.scheduledStartAt = {};
+      if (query.fromDate) {
+        (where.scheduledStartAt as Prisma.DateTimeFilter).gte = new Date(query.fromDate);
+      }
+      if (query.toDate) {
+        (where.scheduledStartAt as Prisma.DateTimeFilter).lte = new Date(query.toDate);
+      }
+    }
+    return where;
+  }
+
+  private toMeta(query: ListAppointmentsQueryDto, total: number): PageMeta {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+    return {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  private emptyPage(query: ListAppointmentsQueryDto): {
+    items: AppointmentResponseDto[];
+    meta: PageMeta;
+  } {
+    return { items: [], meta: this.toMeta(query, 0) };
   }
 }
